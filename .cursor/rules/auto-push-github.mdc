@@ -1,0 +1,13 @@
+---
+description: After requested app changes, commit and push to GitHub automatically.
+alwaysApply: true
+---
+
+# Auto-push to GitHub
+
+When the user asks for app/API changes in this project, after the work is done:
+
+1. Commit the relevant files (never `.env`, credentials, or secrets).
+2. Push `main` to `https://github.com/ravi1927/milk_delivery.git`.
+
+Do not wait for a second "please push" unless the push fails (auth, conflict). Then report the GitHub URL.
