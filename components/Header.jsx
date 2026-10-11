@@ -8,7 +8,7 @@ import { colors } from '../constants/theme';
 
 const ROOTS = ['/login', '/admin', '/delivery'];
 
-export default function Header({ title, subtitle, back }) {
+export default function Header({ title, subtitle, back, onRefresh }) {
   const { signOut, user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -49,6 +49,11 @@ export default function Header({ title, subtitle, back }) {
           {!!subtitle && <Text style={styles.subtitle} numberOfLines={1}>{subtitle}</Text>}
         </View>
       </View>
+      {onRefresh ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Refresh" onPress={onRefresh} hitSlop={10} style={({ pressed }) => [styles.logout, pressed && { opacity: 0.7 }]}>
+          <Ionicons name="refresh" size={18} color={colors.primaryDark} />
+        </Pressable>
+      ) : null}
       <Pressable accessibilityRole="button" accessibilityLabel="Logout" onPress={confirmLogout} disabled={busy} hitSlop={10} style={({ pressed }) => [styles.logout, pressed && { opacity: 0.7 }]}>
         <Ionicons name="log-out-outline" size={18} color={colors.primaryDark} />
         <Text style={styles.logoutText}>Logout</Text>

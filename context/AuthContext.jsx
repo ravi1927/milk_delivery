@@ -14,7 +14,13 @@ export function AuthProvider({ children }) {
     (async () => {
       const wait = new Promise((r) => setTimeout(r, MIN_SPLASH_MS));
       let u = null;
-      try { await s.bootstrap(); u = await s.session(); } catch (e) { console.warn('Startup error', e); }
+      try {
+        await s.bootstrap();
+        u = await s.session();
+      } catch (e) {
+        console.warn('Startup error', e);
+        u = null;
+      }
       await wait;
       if (alive) { setUser(u); setLoading(false); }
     })();
@@ -23,8 +29,11 @@ export function AuthProvider({ children }) {
 
   const signIn = useCallback(async (email, password) => {
     const u = await s.login(email, password);
+    if (u) {
+      try { await s.bootstrap(); } catch (e) { console.warn('Post-login bootstrap', e); }
+    }
     setUser(u);
-    return u; // user object (truthy) or null
+    return u;
   }, []);
 
   const signOut = useCallback(async () => {

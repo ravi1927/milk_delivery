@@ -1,5 +1,5 @@
-import React from 'react';
-import { Platform, ScrollView, StatusBar, StyleSheet, View, useWindowDimensions } from 'react-native';
+import React, { useState } from 'react';
+import { Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Header from './Header';
 import { colors } from '../constants/theme';
@@ -18,23 +18,33 @@ export function useTopInset() {
  * Screen wrapper. The <Header/> child is pulled out and pinned at the top (below the
  * status bar / notch); everything else scrolls underneath it.
  */
-export function ResponsiveContainer({ children, scroll = true, contentStyle }) {
+export function ResponsiveContainer({ children, scroll = true, contentStyle, onRefresh }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const top = useTopInset();
   const sidePad = 12;
   const maxWidth = Math.min(MAX_WIDTH, Math.max(0, width - sidePad * 2 - insets.left - insets.right));
+  const [refreshing, setRefreshing] = useState(false);
+
+  const refresh = async () => {
+    if (!onRefresh) return;
+    setRefreshing(true);
+    try { await onRefresh(); } finally { setRefreshing(false); }
+  };
 
   const kids = React.Children.toArray(children);
   const headerEl = kids.find((k) => React.isValidElement(k) && k.type === Header);
   const body = kids.filter((k) => k !== headerEl);
+  const header = headerEl && onRefresh && !headerEl.props.onRefresh
+    ? React.cloneElement(headerEl, { onRefresh: refresh })
+    : headerEl;
 
   return (
     <View style={[styles.root, { paddingTop: top, paddingLeft: insets.left, paddingRight: insets.right }]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      {headerEl && (
+      {header && (
         <View style={styles.headerBar}>
-          <View style={{ width: maxWidth }}>{headerEl}</View>
+          <View style={{ width: maxWidth }}>{header}</View>
         </View>
       )}
       {scroll ? (
@@ -44,6 +54,7 @@ export function ResponsiveContainer({ children, scroll = true, contentStyle }) {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
+          refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.primary} colors={[colors.primary]} /> : undefined}
         >
           <View style={[styles.inner, { width: maxWidth }, contentStyle]}>{body}</View>
         </ScrollView>

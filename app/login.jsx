@@ -12,8 +12,8 @@ export default function LoginScreen() {
   const { signIn } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [email, setEmail] = useState('admin@milk.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
 
   const handleLogin = async () => {
@@ -23,6 +23,8 @@ export default function LoginScreen() {
       const u = await signIn(email.trim(), password);
       if (!u) return Alert.alert('Login failed', 'Please check your email and password.');
       router.replace(u.role === 'admin' ? '/admin' : '/delivery');
+    } catch (e) {
+      Alert.alert('Login failed', e.message || 'Could not reach the server.');
     } finally { setBusy(false); }
   };
 
@@ -43,11 +45,6 @@ export default function LoginScreen() {
           <Field label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="Enter email" />
           <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry placeholder="Enter password" />
           <PrimaryButton title={busy ? 'Signing in…' : 'Sign In'} onPress={handleLogin} disabled={busy} />
-          <View style={styles.demo}>
-            <Text style={styles.demoTitle}>Demo login</Text>
-            <Text style={styles.demoText}>Admin: admin@milk.com / admin123</Text>
-            <Text style={styles.demoText}>Boy: ravi@milk.com / 123456</Text>
-          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -62,7 +59,4 @@ const styles = StyleSheet.create({
   subtitle: { textAlign: 'center', color: colors.muted, marginTop: 4 },
   card: { width: '100%', maxWidth: 480, backgroundColor: colors.card, borderRadius: 24, padding: 22, borderWidth: 1, borderColor: colors.border, shadowColor: colors.shadow, shadowOpacity: 0.1, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 3 },
   cardTitle: { fontSize: 18, fontWeight: '900', color: colors.text, marginBottom: 14 },
-  demo: { marginTop: 18, padding: 14, borderRadius: 14, backgroundColor: colors.infoBg },
-  demoTitle: { fontWeight: '900', color: colors.primaryDark, marginBottom: 4 },
-  demoText: { color: colors.muted, fontSize: 12, marginTop: 2 },
 });

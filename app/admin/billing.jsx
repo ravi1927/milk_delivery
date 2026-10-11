@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { SHOW_BILLING } from '../../constants/business';
 import Header from '../../components/Header';
 import { PrimaryButton, SectionTitle } from '../../components/Field';
 import { ResponsiveContainer } from '../../components/ResponsiveScreen';
@@ -24,7 +25,9 @@ const STATUS_STYLE = {
 };
 
 export default function Billing() {
+  const router = useRouter();
   const today = s.dateKey();
+  useEffect(() => { if (!SHOW_BILLING) router.replace('/admin'); }, [router]);
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
@@ -170,6 +173,8 @@ export default function Billing() {
   const shown = bills.filter((b) => (filter === 'action' ? needsAction(b) : filter === 'sent' ? isMessageOk(b) : true)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const counts = { action: bills.filter(needsAction).length, sent: bills.filter(isMessageOk).length };
   const pendingList = bills.filter(needsAction);
+
+  if (!SHOW_BILLING) return null;
 
   return (
     <ResponsiveContainer>

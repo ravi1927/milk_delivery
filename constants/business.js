@@ -12,6 +12,9 @@ export const BUSINESS = {
   billingDay: 30,
 };
 
+// Set true later to show Admin → Billing & WhatsApp.
+export const SHOW_BILLING = false;
+
 // PHP REST API base URL, e.g. https://your-domain.com/api. Leave empty to use local demo storage.
 // The URL must point to the PHP API router (index.php), with web-server rewrites configured.
 export const API_BASE_URL = 'http://168.144.223.138/api/index.php';
