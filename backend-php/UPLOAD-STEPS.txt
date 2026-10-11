@@ -1,0 +1,46 @@
+MILK DELIVERY API — UPLOAD STEPS
+================================
+
+1. In cPanel File Manager open public_html.
+2. Create a folder named: api
+3. Upload ALL files from this zip into public_html/api
+   Required files: index.php, .htaccess, .env.example, ok.php
+4. In File Manager enable "Show Hidden Files" so you can see .htaccess and .env
+5. Copy .env.example to a new file named exactly: .env
+6. Edit .env and put YOUR real database values from cPanel:
+
+   DB_HOST=localhost
+   DB_PORT=3306
+   DB_NAME=paste_exact_database_name
+   DB_USER=paste_exact_database_user
+   DB_PASSWORD=paste_exact_database_password
+   APP_SECRET=any-long-random-text
+   CORS_ORIGIN=*
+
+   Use the EXACT names shown in cPanel (often cpaneluser_dbname).
+   Do not keep quotes around the password unless the password itself has quotes.
+
+7. Test in browser (replace with your domain):
+
+   https://YOUR-DOMAIN.com/api/ok.php
+   Expected: {"ok":true,"php":"...","message":"..."}
+
+   https://YOUR-DOMAIN.com/api/ping
+   Expected: {"ok":true,"service":"milk-delivery-api","php":"..."}
+
+   https://YOUR-DOMAIN.com/api/health
+   Expected: {"ok":true,"service":"milk-delivery-api","db":true}
+
+   If /health shows database error, .env names/password are wrong.
+
+8. Login test (PowerShell). Use the admin email and password you created in MySQL:
+
+   curl -X POST "https://YOUR-DOMAIN.com/api/auth/login" -H "Content-Type: application/json" -d "{\"email\":\"admin@yourdomain.com\",\"password\":\"YOUR_PASSWORD\"}"
+
+   Expected: {"user":{...},"token":"..."}
+
+9. In the Expo app set constants/business.js:
+
+   export const API_BASE_URL = 'https://YOUR-DOMAIN.com/api';
+
+   Then run: npx expo start -c

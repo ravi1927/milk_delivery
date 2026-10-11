@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "name": "Dhaara A2 Milk",
+    "slug": "milk-delivery-app",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "scheme": "milkdelivery",
+    "userInterfaceStyle": "light",
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE"],
+      "package": "com.demo.milkdelivery",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1578C8"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.demo.milkdelivery",
+      "supportsTablet": true
+    },
+    "plugins": [
+      "./plugins/withCleartext",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/logo.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
+      "expo-sharing"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "da00864b-07be-4974-aea8-15089966187e"
+      }
+    },
+    "icon": "./assets/icon.png",
+    "backgroundColor": "#FFFFFF"
+  }
+}
