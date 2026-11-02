@@ -31,7 +31,7 @@ export function ResponsiveContainer({ children, scroll = true, contentStyle }) {
 
   return (
     <View style={[styles.root, { paddingTop: top, paddingLeft: insets.left, paddingRight: insets.right }]}>
-      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      <StatusBar barStyle="dark-content" />
       {headerEl && (
         <View style={styles.headerBar}>
           <View style={{ width: maxWidth }}>{headerEl}</View>

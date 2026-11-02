@@ -1,4 +1,4 @@
-# Dhaara A2 Milk – Delivery Management (Expo SDK 57)
+# Dhaara A2 Milk – Delivery Management (Expo SDK 58)
 
 Admin and Delivery Boy app for Android and iOS.
 

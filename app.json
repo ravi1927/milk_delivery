@@ -31,7 +31,8 @@
           "backgroundColor": "#FFFFFF"
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-font"
     ],
     "extra": {
       "router": {},
