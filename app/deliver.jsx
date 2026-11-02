@@ -19,10 +19,12 @@ export default function Deliver() {
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
-    await store.ensureTodayRecords();
-    const [d, c, a] = await Promise.all([store.getDeliveries(), store.getCustomers(), store.getAreas()]);
-    const x = d.find((z) => z.id === id);
-    setRow(x ? { ...x, c: c.find((z) => z.id === x.customerId), a: a.find((z) => z.id === x.areaId) } : null);
+    try {
+      await store.ensureTodayRecords();
+      const [d, c, a] = await Promise.all([store.getDeliveries(), store.getCustomers(), store.getAreas()]);
+      const x = d.find((z) => String(z.id) === String(id));
+      setRow(x ? { ...x, c: c.find((z) => String(z.id) === String(x.customerId)), a: a.find((z) => String(z.id) === String(x.areaId)) } : null);
+    } catch (e) { Alert.alert('Could not load delivery', e.message); }
   };
   useEffect(() => { load(); }, [id]);
 
@@ -44,7 +46,8 @@ export default function Deliver() {
     try {
       await store.delivered(id, uri);
       Alert.alert('Delivery submitted', 'The customer is marked DELIVERED and the proof is saved for this daily record.', [{ text: 'OK', onPress: () => r.back() }]);
-    } finally { setBusy(false); }
+    } catch (e) { Alert.alert('Could not save delivery', e.message); }
+    finally { setBusy(false); }
   };
 
   const navigate = () => openDirections({
@@ -86,15 +89,15 @@ export default function Deliver() {
 
 const styles = StyleSheet.create({
   customer: { backgroundColor: colors.card, borderRadius: 17, padding: 18, borderWidth: 1, borderColor: colors.border },
-  name: { fontSize: 23, fontWeight: '900', color: colors.text },
-  meta: { color: colors.muted, marginTop: 6 },
+  name: { fontSize: 23, fontWeight: '900', color: colors.text, flexShrink: 1 },
+  meta: { color: colors.muted, marginTop: 6, flexShrink: 1 },
   pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 12 },
   pill: { backgroundColor: colors.infoBg, color: colors.primaryDark, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, fontSize: 11, fontWeight: '800' },
   placeholder: { height: 270, borderRadius: 17, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
   camera: { fontSize: 48 },
   placeholderText: { color: colors.muted, marginTop: 8 },
   photo: { width: '100%', height: 300, borderRadius: 17, backgroundColor: '#ddd' },
-  actions: { flexDirection: 'row', gap: 10, marginVertical: 12 },
-  secondaryBtn: { flex: 1, backgroundColor: colors.infoBg, borderRadius: 13, padding: 15, alignItems: 'center' },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginVertical: 12 },
+  secondaryBtn: { flexGrow: 1, flexBasis: '46%', minWidth: 120, backgroundColor: colors.infoBg, borderRadius: 13, padding: 15, alignItems: 'center' },
   secondaryText: { color: colors.primaryDark, fontWeight: '900' },
 });

@@ -2,10 +2,10 @@ import React from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { colors } from '../constants/theme';
 
-export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline }) {
+export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline, autoComplete, textContentType }) {
   return <View style={styles.wrap}>
     <Text style={styles.label}>{label}</Text>
-    <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secureTextEntry} multiline={multiline} autoCapitalize={keyboardType === 'email-address' || secureTextEntry ? 'none' : undefined} autoCorrect={secureTextEntry || keyboardType === 'email-address' ? false : undefined} style={[styles.input, multiline && styles.multi]} />
+    <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secureTextEntry} multiline={multiline} autoComplete={autoComplete} textContentType={textContentType} autoCapitalize={keyboardType === 'email-address' || secureTextEntry ? 'none' : undefined} autoCorrect={secureTextEntry || keyboardType === 'email-address' ? false : undefined} style={[styles.input, multiline && styles.multi]} />
   </View>;
 }
 

@@ -12,9 +12,8 @@ npx expo start -c
 The splash image is part of the native build, so it appears fully after a new build
 (`eas build --platform android --profile preview`); in Expo Go you see the in-app logo loading screen instead.
 
-## Demo accounts
-- Admin: `admin@milk.com` / `admin123`
-- Delivery: `ravi@milk.com` / `123456`
+## Sign in
+The login form starts empty. Enter the email and password stored in the API. Sample usernames and passwords are not filled in and are not shown on the screen.
 
 ## What changed in this version
 - **Layout / safe area** – the header is now pinned *below* the status bar / notch / Dynamic Island on every phone
@@ -46,5 +45,4 @@ A phone app cannot send WhatsApp messages by itself on a schedule while it is cl
 phone, so fully automatic sending on the 30th needs the data moved to a server first (next step).
 
 ## Data
-All data is stored on the device (AsyncStorage). For several phones sharing live data, replace `services/store.js`
-with API / database calls.
+Customers, deliveries, areas, leave, substitutions and bills are loaded from and saved to the PHP API at `API_BASE_URL` in `constants/business.js` (`http://168.144.223.138/api/index.php`). The phone keeps only the signed-in session. WhatsApp link mode still opens WhatsApp on the phone; automatic WhatsApp sending still uses `backend/` when `BILLING_API_URL` is set.

@@ -11,6 +11,7 @@
     },
     "android": {
       "package": "com.demo.milkdelivery",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1578C8"
@@ -18,7 +19,12 @@
     },
     "ios": {
       "bundleIdentifier": "com.demo.milkdelivery",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
     },
     "plugins": [
       "expo-router",

@@ -23,9 +23,11 @@ export default function Customers() {
   const cols = useResponsiveColumns(300);
 
   const load = async () => {
-    const [c, a, u] = await Promise.all([s.getCustomers(), s.getAreas(), s.getUsers()]);
-    setAreas(a);
-    setRows(c.filter((x) => x.active).map((x) => ({ ...x, area: a.find((z) => z.id === x.areaId), boy: u.find((z) => z.id === x.defaultBoyId) })));
+    try {
+      const [c, a, u] = await Promise.all([s.getCustomers(), s.getAreas(), s.getUsers()]);
+      setAreas(a);
+      setRows(c.filter((x) => x.active !== false && x.active !== 0 && x.active !== '0').map((x) => ({ ...x, area: a.find((z) => String(z.id) === String(x.areaId)), boy: u.find((z) => String(z.id) === String(x.defaultBoyId)) })));
+    } catch (e) { Alert.alert('Could not load customers', e.message); }
   };
   useFocusEffect(useCallback(() => { load(); }, []));
 
@@ -130,11 +132,11 @@ export default function Customers() {
 const styles = StyleSheet.create({
   top: { marginBottom: 8 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  card: { backgroundColor: colors.card, borderRadius: 17, padding: 16, borderWidth: 1, borderColor: colors.border },
+  card: { backgroundColor: colors.card, borderRadius: 17, padding: 16, borderWidth: 1, borderColor: colors.border, minWidth: 0, maxWidth: '100%' },
   cardTop: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
   avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.infoBg, alignItems: 'center', justifyContent: 'center' },
   avatarText: { fontSize: 20, fontWeight: '900', color: colors.primary },
-  name: { fontSize: 17, fontWeight: '900', color: colors.text },
+  name: { fontSize: 17, fontWeight: '900', color: colors.text, flexShrink: 1 },
   meta: { color: colors.muted, fontSize: 12, marginTop: 3 },
   line: { color: colors.muted, fontSize: 13, marginTop: 7 },
   rate: { fontWeight: '900', color: colors.secondaryDark },

@@ -39,9 +39,14 @@ export default function Billing() {
   const leftApp = useRef(false);
 
   const reload = useCallback(async () => {
-    const [c, b, d] = await Promise.all([s.getCustomers(), s.getBills(), s.getDeliveries()]);
-    setCustomers(c); setBills(b); setDeliveries(d);
-    return b;
+    try {
+      const [c, b, d] = await Promise.all([s.getCustomers(), s.getBills(), s.getDeliveries()]);
+      setCustomers(c); setBills(b); setDeliveries(d);
+      return b;
+    } catch (e) {
+      Alert.alert('Could not load bills', e.message);
+      return [];
+    }
   }, []);
 
   useFocusEffect(useCallback(() => {

@@ -12,6 +12,10 @@ export const BUSINESS = {
   billingDay: 30,
 };
 
+// PHP REST API already used by this project. Paths are appended to index.php
+// (for example /auth/login and /bootstrap). Health check: /ping and /health.
+export const API_BASE_URL = 'http://168.144.223.138/api/index.php';
+
 // ─────────────────────────────────────────────────────────────
 // WhatsApp sending mode
 //  • Leave BILLING_API_URL empty  → "WhatsApp link" mode. The app opens WhatsApp with the

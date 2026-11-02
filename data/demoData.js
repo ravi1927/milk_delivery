@@ -1,3 +1,4 @@
+// Sample shape only. The app does not load this file; live data comes from the PHP API.
 export const users = [
   { id: 'admin1', name: 'Admin User', email: 'admin@milk.com', password: 'admin123', role: 'admin' },
   { id: 'boy1', name: 'Ravi Kumar', email: 'ravi@milk.com', password: '123456', role: 'delivery', areaId: 'area1', onLeave: false },
