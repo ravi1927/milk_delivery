@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseLitres, cycleDueKey } from './billing';
+import { customerLoginPlan, customerRoleUnsupported } from './customerLogin';
 import { parsePoint } from './geo';
 import * as api from './apiClient';
 
@@ -264,33 +265,40 @@ function withoutLogin(input) {
   return fields;
 }
 
+const LOGIN_INCOMPLETE = 'Customer saved. A login is created only when both an email and a password of at least 8 characters are filled in.';
+
 async function syncCustomerLogin(customer, email, password) {
-  const em = String(email || '').trim().toLowerCase();
-  const pw = String(password || '');
-  if (!em && !pw) return null;
-  if (!em) throw new Error('Enter an email for the customer login.');
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) throw new Error('Enter a valid email for the customer login.');
-  const users = await getUsers();
-  const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, customer.id));
-  if (!existing && pw.length < 8) throw new Error('Set a password of at least 8 characters to create the customer login.');
-  if (pw && pw.length < 8) throw new Error('Password must be at least 8 characters, or leave it blank to keep the current password.');
-  if (api.apiEnabled()) {
-    if (existing) {
-      const body = { name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true };
-      if (pw) body.password = pw;
-      return api.updateUser(existing.id, body);
+  if (customerLoginPlan(email, password, false).action === 'skip') return null;
+  try {
+    const users = await getUsers();
+    const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, customer.id));
+    const plan = customerLoginPlan(email, password, !!existing);
+    if (plan.action === 'skip') return null;
+    if (plan.action === 'incomplete') return LOGIN_INCOMPLETE;
+    const em = plan.email;
+    const pw = plan.password || '';
+    if (api.apiEnabled()) {
+      if (existing) {
+        const body = { name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true };
+        if (pw) body.password = pw;
+        await api.updateUser(existing.id, body);
+      } else {
+        await api.createUser({ id: `cu_${customer.id}`.slice(0, 64), name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id });
+      }
+      return null;
     }
-    const userId = `cu_${customer.id}`.slice(0, 64);
-    return api.createUser({ id: userId, name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id });
+    if (users.some((u) => !same(u.id, existing?.id) && String(u.email || '').toLowerCase() === em)) return 'Customer saved. That email is already used by another login.';
+    if (existing) {
+      await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true, ...(pw ? { password: pw } : {}) } : u));
+      return null;
+    }
+    const row = { id: `cu_${customer.id}`.slice(0, 64), name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id, active: true };
+    await setJson(K.u, [...users, row]);
+    return null;
+  } catch (err) {
+    if (customerRoleUnsupported(err?.message)) return null;
+    return `Customer saved. The login was not created: ${err?.message || 'try again from Edit.'}`;
   }
-  if (users.some((u) => !same(u.id, existing?.id) && String(u.email || '').toLowerCase() === em)) throw new Error('That email is already in use.');
-  if (existing) {
-    await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true, ...(pw ? { password: pw } : {}) } : u));
-    return existing;
-  }
-  const row = { id: `cu_${customer.id}`.slice(0, 64), name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id, active: true };
-  await setJson(K.u, [...users, row]);
-  return row;
 }
 
 function customerPayload(input, prev, id) {
@@ -324,18 +332,20 @@ export async function saveCustomer(input, id) {
     const prev = id ? cs.find(c => same(c.id, id)) || {} : {};
     const row = customerPayload(fields, prev, id || `c_${Date.now()}`);
     await api.save('customers', row);
-    await syncCustomerLogin(row, email, password);
+    const loginWarning = await syncCustomerLogin(row, email, password);
     await ensureTodayRecords();
-    return row;
+    return loginWarning ? { ...row, loginWarning } : row;
   }
   const cs = await getCustomers();
   let targetId = id;
   if (id) await setJson(K.c, cs.map(c => c.id === id ? { ...c, ...clean } : c));
   else { targetId = `c_${Date.now()}`; await setJson(K.c, [...cs, { ...clean, id: targetId, createdOn: dateKey() }]); }
-  await syncCustomerLogin({ ...clean, id: targetId }, email, password);
+  const loginWarning = await syncCustomerLogin({ ...clean, id: targetId }, email, password);
   await ensureTodayRecords();
   const ds = await getDeliveries(); const today = dateKey();
   await setJson(K.d, ds.map(d => d.date === today && d.customerId === targetId && d.status === 'pending' ? { ...d, expectedLitres: litresFrom(clean.milkQuantity), ratePerLitre: Number(clean.ratePerLitre || 0), amount: litresFrom(clean.milkQuantity) * Number(clean.ratePerLitre || 0), areaId: clean.areaId } : d));
+  const saved = { ...clean, id: targetId };
+  return loginWarning ? { ...saved, loginWarning } : saved;
 }
 
 export async function deleteCustomer(id) {

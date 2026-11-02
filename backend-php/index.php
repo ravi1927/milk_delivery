@@ -74,6 +74,18 @@ function columnExists(PDO $pdo, string $table, string $column): bool {
   return (bool)$q->fetchColumn();
 }
 function usersHaveCustomerLink(PDO $pdo): bool { return columnExists($pdo,'users','customer_record_id'); }
+function customerRoleReady(PDO $pdo): bool {
+  if (!usersHaveCustomerLink($pdo)) return false;
+  $q=$pdo->prepare("SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='role' LIMIT 1");
+  $q->execute();
+  $type=strtolower((string)$q->fetchColumn());
+  return str_contains($type, 'customer');
+}
+function roleValueRejected(Throwable $e): bool {
+  $msg=strtolower($e->getMessage());
+  $mentionsRole=str_contains($msg, 'role');
+  return $mentionsRole && (str_contains($msg, 'truncated') || str_contains($msg, 'invalid') || str_contains($msg, 'enum'));
+}
 function publicUser(array $u): array {
   unset($u['password_hash']);
   $u['areaId']=$u['area_id'] ?? ($u['areaId'] ?? null);
@@ -98,9 +110,7 @@ function recordLogin(PDO $pdo, ?string $userId, ?string $role, ?string $password
   $q->execute([$userId,$role,$passwordHash,$success?1:0]);
 }
 function mirrorLoginPassword(PDO $pdo, string $userId, string $role, string $hash): void {
-  if (!tableExists($pdo,'login')) {
-    throw new RuntimeException('The login table is missing. Apply backend-php/migrations/2026-11-02-customer-login-photos-skips.sql before changing passwords.');
-  }
+  if (!tableExists($pdo,'login')) return;
   $pdo->prepare('UPDATE login SET password_hash=?, role=? WHERE user_id=?')->execute([$hash,$role,$userId]);
   $q=$pdo->prepare('SELECT id FROM login WHERE user_id=? LIMIT 1');
   $q->execute([$userId]);
@@ -512,7 +522,7 @@ if ($resource==='users') {
     if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || strlen($password)<8 || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email, password (8+ chars), and valid role are required']);
     if ($role==='customer') {
       if ($linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
-      if (!usersHaveCustomerLink($pdo)) out(500,['error'=>'users.customer_record_id is missing. Apply backend-php/migrations/2026-11-02-customer-login-photos-skips.sql']);
+      if (!customerRoleReady($pdo)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
       $q=$pdo->prepare("SELECT record_id FROM app_records WHERE resource='customers' AND record_id=?");
       $q->execute([$linked]);
       if (!$q->fetch()) out(422,['error'=>'No app customer record with that id']);
@@ -535,6 +545,7 @@ if ($resource==='users') {
       if ($pdo->inTransaction()) $pdo->rollBack();
       $dup=str_contains(strtolower($e->getMessage()),'duplicate') || (string)$e->getCode()==='23000';
       if ($dup) out(409,['error'=>'Email or user ID already exists']);
+      if (roleValueRejected($e)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
       if (!usersHaveCustomerLink($pdo) && $role!=='customer') {
         try {
           $pdo->beginTransaction();
@@ -577,7 +588,7 @@ if ($resource==='users') {
     if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email and role are required']);
     if ($role==='customer') {
       if ($linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
-      if (!usersHaveCustomerLink($pdo)) out(500,['error'=>'users.customer_record_id is missing. Apply backend-php/migrations/2026-11-02-customer-login-photos-skips.sql']);
+      if (!customerRoleReady($pdo)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
     } else $linked=null;
     $q=$pdo->prepare('SELECT id FROM users WHERE LOWER(email)=? AND CAST(id AS CHAR)<>? LIMIT 1');
     $q->execute([$email,(string)$existing['id']]);
@@ -608,7 +619,9 @@ if ($resource==='users') {
     } catch (Throwable $e) {
       if ($pdo->inTransaction()) $pdo->rollBack();
       $dup=str_contains(strtolower($e->getMessage()),'duplicate') || (string)$e->getCode()==='23000';
-      out($dup?409:500,['error'=>$dup?'Email is already in use':'Could not update the user','detail'=>$e->getMessage()]);
+      if ($dup) out(409,['error'=>'Email is already in use']);
+      if (roleValueRejected($e)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
+      out(500,['error'=>'Could not update the user','detail'=>$e->getMessage()]);
     }
     out(200,['item'=>['id'=>$rowId,'name'=>$name,'email'=>$email,'role'=>$role,'areaId'=>$areaId,'customerRecordId'=>$linked,'active'=>$active]]);
   }

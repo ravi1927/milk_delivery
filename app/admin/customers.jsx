@@ -69,9 +69,10 @@ export default function Customers() {
           return;
         }
       }
-      await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
+      const saved = await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
       setModal(false);
       await load();
+      if (saved?.loginWarning) Alert.alert('Customer saved', saved.loginWarning);
     } catch (error) {
       Alert.alert('Could not save', error.message || 'Try again.');
     } finally { setBusy(false); }
@@ -128,8 +129,8 @@ export default function Customers() {
         />
         <Field label="Daily milk quantity" value={form.milkQuantity} onChangeText={(v) => setForm({ ...form, milkQuantity: v })} placeholder="Example: 1 L / 500 ml" />
         <Field label="Rate per litre (₹)" value={form.ratePerLitre} onChangeText={(v) => setForm({ ...form, ratePerLitre: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder="60" />
-        <Field label="Login email" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoComplete="email" placeholder="Optional — creates a customer login" />
-        <Field label="Login password" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry autoComplete="new-password" placeholder={editing ? 'Leave blank to keep the current password' : '8+ characters if you set an email'} />
+        <Field label="Login email (optional)" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoComplete="off" textContentType="none" importantForAutofill="no" placeholder="Leave blank to save without a login" />
+        <Field label="Login password (optional)" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry autoComplete="off" textContentType="none" importantForAutofill="no" placeholder="Leave blank to save without a login" />
         <PrimaryButton title={busy ? 'Saving...' : editing ? 'Update Customer' : 'Save Customer'} onPress={save} disabled={busy} />
         <PrimaryButton title="Cancel" secondary onPress={() => setModal(false)} />
       </SheetModal>
