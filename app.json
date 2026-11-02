@@ -32,7 +32,13 @@
         }
       ],
       "expo-sharing",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Dhaara A2 Milk uses your location when you pin a customer for delivery."
+        }
+      ]
     ],
     "extra": {
       "router": {},

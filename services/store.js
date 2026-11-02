@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { users, areas, customers } from '../data/demoData';
 import { parseLitres, cycleDueKey } from './billing';
+import { hasCoords, parsePoint } from './geo';
 
 const K = { u: 'a2_users', a: 'a2_areas', c: 'a2_customers', d: 'a2_daily_deliveries', sub: 'a2_substitutions', lr: 'a2_leave_requests', s: 'a2_session', bills: 'a2_bills' };
 export const dateKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -15,7 +16,21 @@ export async function bootstrap() {
   if (!(await AsyncStorage.getItem(K.u))) await AsyncStorage.multiSet([[K.u, JSON.stringify(users)], [K.a, JSON.stringify(areas)], [K.c, JSON.stringify(customers)], [K.d, '[]'], [K.sub, '[]'], [K.lr, '[]']]);
   if (!(await AsyncStorage.getItem(K.lr))) await AsyncStorage.setItem(K.lr, '[]');
   if (!(await AsyncStorage.getItem(K.bills))) await AsyncStorage.setItem(K.bills, '[]');
+  await backfillSeedLocations();
   await ensureTodayRecords();
+}
+async function backfillSeedLocations() {
+  const cs = await getCustomers();
+  let changed = false;
+  const next = cs.map((c) => {
+    if (hasCoords(c)) return c;
+    const seed = customers.find((row) => row.id === c.id);
+    if (!seed || !hasCoords(seed) || String(c.address || '').trim() !== String(seed.address || '').trim()) return c;
+    const point = parsePoint(seed.latitude, seed.longitude);
+    changed = true;
+    return { ...c, latitude: point.latitude, longitude: point.longitude };
+  });
+  if (changed) await setJson(K.c, next);
 }
 export const getUsers = () => getJson(K.u);
 export const getAreas = () => getJson(K.a);
@@ -66,7 +81,8 @@ export async function delivered(id, proofUri) {
 
 export async function saveCustomer(input, id) {
   const cs = await getCustomers();
-  const clean = { ...input, ratePerLitre: Number(input.ratePerLitre || 0), active: true, stoppedOn: null };
+  const point = parsePoint(input.latitude, input.longitude);
+  const clean = { ...input, ratePerLitre: Number(input.ratePerLitre || 0), active: true, stoppedOn: null, latitude: point ? point.latitude : null, longitude: point ? point.longitude : null };
   let targetId = id;
   if (id) await setJson(K.c, cs.map(c => c.id === id ? { ...c, ...clean } : c));
   else { targetId = `c_${Date.now()}`; await setJson(K.c, [...cs, { ...clean, id: targetId, createdOn: dateKey() }]); }

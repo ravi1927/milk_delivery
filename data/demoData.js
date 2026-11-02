@@ -12,13 +12,13 @@ export const areas = [
 ];
 
 export const customers = [
-  { id: 'c1', name: 'Anil Kumar', phone: '9876500011', address: '12-4, North Street', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '1 L', ratePerLitre: 60, active: true },
-  { id: 'c2', name: 'Lakshmi Devi', phone: '9876500012', address: '18-2, North Street', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '500 ml', ratePerLitre: 62, active: true },
-  { id: 'c3', name: 'Prakash Rao', phone: '9876500013', address: '42, Temple Road', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '1 L', ratePerLitre: 60, active: true },
-  { id: 'c4', name: 'Meena Sharma', phone: '9876500014', address: '8-11, Main Road', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '1.5 L', ratePerLitre: 60, active: true },
-  { id: 'c5', name: 'Ramesh Babu', phone: '9876500015', address: '22, Gandhi Road', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '1 L', ratePerLitre: 60, active: true },
-  { id: 'c6', name: 'Kiran Kumar', phone: '9876500016', address: '7-3, Market Lane', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '500 ml', ratePerLitre: 60, active: true },
-  { id: 'c7', name: 'Sunitha Rao', phone: '9876500017', address: '31, Lake View', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '1 L', ratePerLitre: 60, active: true },
-  { id: 'c8', name: 'Vijay Kumar', phone: '9876500018', address: '14, Railway Colony', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '1 L', ratePerLitre: 60, active: true },
-  { id: 'c9', name: 'Deepa Reddy', phone: '9876500019', address: '5, Green Park', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '500 ml', ratePerLitre: 60, active: true },
+  { id: 'c1', name: 'Anil Kumar', phone: '9876500011', address: '12-4, North Street', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '1 L', ratePerLitre: 60, active: true, latitude: 13.65542, longitude: 79.40886 },
+  { id: 'c2', name: 'Lakshmi Devi', phone: '9876500012', address: '18-2, North Street', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '500 ml', ratePerLitre: 62, active: true, latitude: 13.64911, longitude: 79.42654 },
+  { id: 'c3', name: 'Prakash Rao', phone: '9876500013', address: '42, Temple Road', areaId: 'area1', defaultBoyId: 'boy1', milkQuantity: '1 L', ratePerLitre: 60, active: true, latitude: 13.633122, longitude: 79.423172 },
+  { id: 'c4', name: 'Meena Sharma', phone: '9876500014', address: '8-11, Main Road', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '1.5 L', ratePerLitre: 60, active: true, latitude: 13.63551, longitude: 79.41989 },
+  { id: 'c5', name: 'Ramesh Babu', phone: '9876500015', address: '22, Gandhi Road', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '1 L', ratePerLitre: 60, active: true, latitude: 13.631173, longitude: 79.417226 },
+  { id: 'c6', name: 'Kiran Kumar', phone: '9876500016', address: '7-3, Market Lane', areaId: 'area2', defaultBoyId: 'boy2', milkQuantity: '500 ml', ratePerLitre: 60, active: true, latitude: 13.6289, longitude: 79.4248 },
+  { id: 'c7', name: 'Sunitha Rao', phone: '9876500017', address: '31, Lake View', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '1 L', ratePerLitre: 60, active: true, latitude: 13.6184, longitude: 79.4122 },
+  { id: 'c8', name: 'Vijay Kumar', phone: '9876500018', address: '14, Railway Colony', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '1 L', ratePerLitre: 60, active: true, latitude: 13.6242, longitude: 79.4195 },
+  { id: 'c9', name: 'Deepa Reddy', phone: '9876500019', address: '5, Green Park', areaId: 'area3', defaultBoyId: 'boy3', milkQuantity: '500 ml', ratePerLitre: 60, active: true, latitude: 13.6098, longitude: 79.4301 },
 ];
