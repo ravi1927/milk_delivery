@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import AppLogo from '../components/AppLogo';
 import { BUSINESS } from '../constants/business';
 import { colors } from '../constants/theme';
+import { homeForRole } from '../services/roles';
 
 // Branded loading screen shown while the app starts (then redirects to login / dashboard).
 export default function Index() {
@@ -19,7 +20,7 @@ export default function Index() {
     ]).start();
   }, []);
 
-  if (!loading) return <Redirect href={user ? (user.role === 'admin' ? '/admin' : '/delivery') : '/login'} />;
+  if (!loading) return <Redirect href={user ? homeForRole(user.role) : '/login'} />;
 
   return (
     <View style={styles.root}>

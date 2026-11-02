@@ -5,8 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import AppLogo from './AppLogo';
 import { colors } from '../constants/theme';
+import { homeForRole } from '../services/roles';
 
-const ROOTS = ['/login', '/admin', '/delivery'];
+const ROOTS = ['/login', '/admin', '/delivery', '/customer'];
 
 export default function Header({ title, subtitle, back }) {
   const { signOut, user } = useAuth();
@@ -18,7 +19,7 @@ export default function Header({ title, subtitle, back }) {
 
   const goBack = () => {
     if (router.canGoBack()) router.back();
-    else router.replace(user?.role === 'admin' ? '/admin' : '/delivery');
+    else router.replace(homeForRole(user?.role));
   };
 
   const doLogout = async () => {

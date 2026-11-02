@@ -33,13 +33,15 @@ MILK DELIVERY API — UPLOAD STEPS
 
    If /health shows database error, .env names/password are wrong.
 
-8. Login test (PowerShell). Use the admin email and password you created in MySQL:
+8. If this database already exists, apply migrations/2026-11-02-customer-login-photos-skips.sql in phpMyAdmin before using customer login, photo cleanup, or skip requests. It only adds columns and tables. Do not run any DELETE or DROP.
+
+9. Login test (PowerShell). Use the admin email and password you created in MySQL:
 
    curl -X POST "https://YOUR-DOMAIN.com/api/auth/login" -H "Content-Type: application/json" -d "{\"email\":\"admin@yourdomain.com\",\"password\":\"YOUR_PASSWORD\"}"
 
    Expected: {"user":{...},"token":"..."}
 
-9. In the Expo app set constants/business.js:
+10. In the Expo app set constants/business.js:
 
    export const API_BASE_URL = 'https://YOUR-DOMAIN.com/api';
 

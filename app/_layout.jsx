@@ -3,6 +3,7 @@ import { Stack, useRootNavigationState, useRouter, useSegments } from 'expo-rout
 import * as SplashScreen from 'expo-splash-screen';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../context/AuthContext';
+import { homeForRole } from '../services/roles';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -20,9 +21,12 @@ function AuthGate() {
   useEffect(() => {
     if (!nav?.key || loading) return;
     if (!user) { if (first !== 'login') router.replace('/login'); return; }
-    const home = user.role === 'admin' ? '/admin' : '/delivery';
-    if (first === 'login') router.replace(home);
-    else if (first === 'admin' && user.role !== 'admin') router.replace('/delivery');
+    const home = homeForRole(user.role);
+    const onDelivery = first === 'delivery' || first === 'deliver';
+    if (!first || first === 'login') router.replace(home);
+    else if (user.role === 'admin' && first !== 'admin') router.replace(home);
+    else if (user.role === 'customer' && first !== 'customer') router.replace(home);
+    else if (user.role !== 'admin' && user.role !== 'customer' && !onDelivery) router.replace(home);
   }, [user, loading, first, nav?.key]);
 
   return <Stack screenOptions={{ headerShown: false, animation: 'fade' }} />;

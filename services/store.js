@@ -3,7 +3,7 @@ import { parseLitres, cycleDueKey } from './billing';
 import { parsePoint } from './geo';
 import * as api from './apiClient';
 
-const K = { u: 'a2_users', a: 'a2_areas', c: 'a2_customers', d: 'a2_daily_deliveries', sub: 'a2_substitutions', lr: 'a2_leave_requests', s: 'a2_session', bills: 'a2_bills' };
+const K = { u: 'a2_users', a: 'a2_areas', c: 'a2_customers', d: 'a2_daily_deliveries', sub: 'a2_substitutions', lr: 'a2_leave_requests', s: 'a2_session', bills: 'a2_bills', skips: 'a2_skip_requests' };
 export const dateKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 export const addDays = (date, amount) => { const d = new Date(`${date}T12:00:00`); d.setDate(d.getDate() + amount); return d; };
 export const money = n => `₹${Number(n || 0).toFixed(0)}`;
@@ -67,6 +67,14 @@ export const getDeliveries = () => api.apiEnabled() ? apiList('deliveries') : ge
 export const getSubstitutions = () => api.apiEnabled() ? apiList('substitutions') : getJson(K.sub);
 export const getLeaveRequests = () => api.apiEnabled() ? apiList('leave_requests') : getJson(K.lr);
 export const getBills = () => api.apiEnabled() ? apiList('bills') : getJson(K.bills);
+export async function getSkipRequests() {
+  if (!api.apiEnabled()) return getJson(K.skips, []);
+  try { return asList(await api.list('skip_requests')); }
+  catch (err) {
+    if (/not found|migration|missing|permission required/i.test(String(err?.message || ''))) return [];
+    throw err;
+  }
+}
 
 export async function login(email, password) {
   const e = String(email || '').trim();
@@ -204,10 +212,16 @@ export async function ensureDailyRecords(day = dateKey()) {
     await syncPendingAssignments(day);
     return;
   }
-  const [cs, ds, subs, leaveRows] = await Promise.all([getCustomers(), getDeliveries(), getSubstitutions(), getLeaveRequests()]);
+  const [cs, ds, subs, leaveRows, skips] = await Promise.all([getCustomers(), getDeliveries(), getSubstitutions(), getLeaveRequests(), getSkipRequests()]);
+  const skipped = new Set(skips.filter((s) => s.date === day).map((s) => String(s.customerRecordId || s.customerId || '')));
   const existing = new Map(ds.filter(x => x.date === day).map(x => [x.customerId, x]));
   const rows = [];
   for (const c of cs.filter(isActive)) {
+    if (skipped.has(String(c.id))) {
+      const old = existing.get(c.id);
+      if (old && old.status !== 'pending') rows.push(old);
+      continue;
+    }
     const old = existing.get(c.id);
     const effectiveBoyId = await effectiveBoyFor(c, subs, day, leaveRows);
     if (old) {
@@ -222,10 +236,61 @@ export async function ensureDailyRecords(day = dateKey()) {
 
 export const ensureTodayRecords = () => ensureDailyRecords(dateKey());
 
+function isLocalProof(uri) {
+  const value = String(uri || '');
+  return /^(file:|content:|ph:|blob:|data:|assets-library:)/i.test(value);
+}
+
 export async function delivered(id, proofUri) {
-  if (api.apiEnabled()) { await api.markDelivered(id, proofUri); return; }
+  if (api.apiEnabled()) {
+    if (isLocalProof(proofUri)) { await api.uploadDeliveryProof(id, proofUri); return; }
+    await api.markDelivered(id, proofUri);
+    return;
+  }
   const ds = await getDeliveries();
-  await setJson(K.d, ds.map(x => x.id === id ? { ...x, status: 'delivered', proofUri, deliveredAt: new Date().toISOString() } : x));
+  await setJson(K.d, ds.map(x => x.id === id ? { ...x, status: 'delivered', proofUri, deliveredAt: new Date().toISOString(), proofCreatedAt: new Date().toISOString() } : x));
+}
+
+export async function cleanupOldProofs() {
+  if (!api.apiEnabled()) throw new Error('Photo cleanup runs on the server.');
+  return api.cleanupOldPhotos();
+}
+
+function withoutLogin(input) {
+  const fields = { ...input };
+  delete fields.email;
+  delete fields.password;
+  delete fields.customerRecordId;
+  return fields;
+}
+
+async function syncCustomerLogin(customer, email, password) {
+  const em = String(email || '').trim().toLowerCase();
+  const pw = String(password || '');
+  if (!em && !pw) return null;
+  if (!em) throw new Error('Enter an email for the customer login.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) throw new Error('Enter a valid email for the customer login.');
+  const users = await getUsers();
+  const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, customer.id));
+  if (!existing && pw.length < 8) throw new Error('Set a password of at least 8 characters to create the customer login.');
+  if (pw && pw.length < 8) throw new Error('Password must be at least 8 characters, or leave it blank to keep the current password.');
+  if (api.apiEnabled()) {
+    if (existing) {
+      const body = { name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true };
+      if (pw) body.password = pw;
+      return api.updateUser(existing.id, body);
+    }
+    const userId = `cu_${customer.id}`.slice(0, 64);
+    return api.createUser({ id: userId, name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id });
+  }
+  if (users.some((u) => !same(u.id, existing?.id) && String(u.email || '').toLowerCase() === em)) throw new Error('That email is already in use.');
+  if (existing) {
+    await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name, email: em, role: 'customer', customerRecordId: customer.id, active: true, ...(pw ? { password: pw } : {}) } : u));
+    return existing;
+  }
+  const row = { id: `cu_${customer.id}`.slice(0, 64), name: customer.name, email: em, password: pw, role: 'customer', customerRecordId: customer.id, active: true };
+  await setJson(K.u, [...users, row]);
+  return row;
 }
 
 function customerPayload(input, prev, id) {
@@ -241,18 +306,25 @@ function customerPayload(input, prev, id) {
     id: id || prev.id || `c_${Date.now()}`,
     createdOn: prev.createdOn || dateKey(),
   };
+  delete clean.password;
+  delete clean.password_hash;
+  delete clean.email;
   if (!Object.prototype.hasOwnProperty.call(input, 'defaultBoyId')) clean.defaultBoyId = prev.defaultBoyId ?? null;
   return clean;
 }
 
 export async function saveCustomer(input, id) {
-  const point = parsePoint(input.latitude, input.longitude);
-  const clean = { ...input, ratePerLitre: Number(input.ratePerLitre || 0), active: true, stoppedOn: null, latitude: point ? point.latitude : null, longitude: point ? point.longitude : null };
+  const email = input.email;
+  const password = input.password;
+  const fields = withoutLogin(input);
+  const point = parsePoint(fields.latitude, fields.longitude);
+  const clean = { ...fields, ratePerLitre: Number(fields.ratePerLitre || 0), active: true, stoppedOn: null, latitude: point ? point.latitude : null, longitude: point ? point.longitude : null };
   if (api.apiEnabled()) {
     const cs = await getCustomers();
     const prev = id ? cs.find(c => same(c.id, id)) || {} : {};
-    const row = customerPayload(input, prev, id || `c_${Date.now()}`);
+    const row = customerPayload(fields, prev, id || `c_${Date.now()}`);
     await api.save('customers', row);
+    await syncCustomerLogin(row, email, password);
     await ensureTodayRecords();
     return row;
   }
@@ -260,6 +332,7 @@ export async function saveCustomer(input, id) {
   let targetId = id;
   if (id) await setJson(K.c, cs.map(c => c.id === id ? { ...c, ...clean } : c));
   else { targetId = `c_${Date.now()}`; await setJson(K.c, [...cs, { ...clean, id: targetId, createdOn: dateKey() }]); }
+  await syncCustomerLogin({ ...clean, id: targetId }, email, password);
   await ensureTodayRecords();
   const ds = await getDeliveries(); const today = dateKey();
   await setJson(K.d, ds.map(d => d.date === today && d.customerId === targetId && d.status === 'pending' ? { ...d, expectedLitres: litresFrom(clean.milkQuantity), ratePerLitre: Number(clean.ratePerLitre || 0), amount: litresFrom(clean.milkQuantity) * Number(clean.ratePerLitre || 0), areaId: clean.areaId } : d));
@@ -270,6 +343,11 @@ export async function deleteCustomer(id) {
     const cs = await getCustomers();
     const c = cs.find(x => same(x.id, id));
     if (c) await api.save('customers', { ...c, active: false, defaultBoyId: null, stoppedOn: dateKey() });
+    try {
+      const users = await getUsers();
+      const login = users.find((u) => u.role === 'customer' && same(u.customerRecordId, id));
+      if (login) await api.updateUser(login.id, { name: login.name, email: login.email, role: 'customer', customerRecordId: id, active: false });
+    } catch (err) { console.warn('Could not disable customer login', err); }
     return;
   }
   const cs = await getCustomers();
@@ -327,6 +405,33 @@ export async function unassignCustomer(id) {
   const ds = await getDeliveries();
   const t = dateKey();
   await setJson(K.d, ds.map(d => d.date === t && d.customerId === id && d.status === 'pending' ? { ...d, boyId: null } : d));
+}
+
+export async function requestSkip({ date, reason }) {
+  const day = String(date || '');
+  const why = String(reason || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Choose a date.');
+  if (day < dateKey()) throw new Error('Choose today or a future date.');
+  if (!why) throw new Error('Enter a reason for the skip.');
+  if (why.length > 500) throw new Error('Reason must be 500 characters or fewer.');
+  if (api.apiEnabled()) return api.save('skip_requests', { date: day, reason: why });
+  const me = await session();
+  const cid = me?.customerRecordId;
+  if (!cid) throw new Error('This login is not linked to a customer.');
+  const rows = await getJson(K.skips, []);
+  if (rows.some((r) => r.date === day && same(r.customerRecordId, cid))) throw new Error('A skip is already requested for that date.');
+  const record = { id: `skip_${Date.now()}`, customerRecordId: cid, date: day, reason: why, seen: false, createdAt: new Date().toISOString() };
+  await setJson(K.skips, [...rows, record]);
+  await ensureDailyRecords(day);
+  return record;
+}
+
+export async function acknowledgeSkip(id) {
+  if (api.apiEnabled()) return api.ackSkip(id);
+  const rows = await getJson(K.skips, []);
+  const next = rows.map((r) => same(r.id, id) ? { ...r, seen: true } : r);
+  await setJson(K.skips, next);
+  return next.find((r) => same(r.id, id)) || null;
 }
 
 export async function applyLeaveRequest({ boyId, date, reason }) {

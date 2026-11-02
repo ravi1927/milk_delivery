@@ -7,6 +7,7 @@ import AppLogo from '../components/AppLogo';
 import { Field, PrimaryButton } from '../components/Field';
 import { BUSINESS } from '../constants/business';
 import { colors } from '../constants/theme';
+import { homeForRole } from '../services/roles';
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
@@ -27,7 +28,7 @@ export default function LoginScreen() {
     try {
       const u = await signIn(trimmed, password);
       if (!u) return Alert.alert('Login failed', 'Please check your email and password.');
-      router.replace(u.role === 'admin' ? '/admin' : '/delivery');
+      router.replace(homeForRole(u.role));
     } catch (e) {
       Alert.alert('Login failed', e?.message || 'Could not reach the server.');
     } finally { setBusy(false); }

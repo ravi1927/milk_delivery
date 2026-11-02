@@ -11,11 +11,12 @@ import { geocodeAddress, hasCoords, parsePoint } from '../../services/geo';
 import * as s from '../../services/store';
 import { colors } from '../../constants/theme';
 
-const emptyForm = (areaId = '') => ({ name: '', phone: '', address: '', areaId, milkQuantity: '1 L', ratePerLitre: '60', latitude: null, longitude: null });
+const emptyForm = (areaId = '') => ({ name: '', phone: '', address: '', areaId, milkQuantity: '1 L', ratePerLitre: '60', latitude: null, longitude: null, email: '', password: '' });
 
 export default function Customers() {
   const [rows, setRows] = useState([]);
   const [areas, setAreas] = useState([]);
+  const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
@@ -26,11 +27,13 @@ export default function Customers() {
     try {
       const [c, a, u] = await Promise.all([s.getCustomers(), s.getAreas(), s.getUsers()]);
       setAreas(a);
+      setUsers(u);
       setRows(c.filter((x) => x.active !== false && x.active !== 0 && x.active !== '0').map((x) => ({ ...x, area: a.find((z) => String(z.id) === String(x.areaId)), boy: u.find((z) => String(z.id) === String(x.defaultBoyId)) })));
     } catch (e) { Alert.alert('Could not load customers', e.message); }
   };
   useFocusEffect(useCallback(() => { load(); }, []));
 
+  const loginFor = (row) => users.find((u) => u.role === 'customer' && String(u.customerRecordId) === String(row?.id) && u.active !== false && u.active !== 0 && u.active !== '0');
   const open = (row = null) => {
     setEditing(row);
     setForm(row ? {
@@ -42,6 +45,8 @@ export default function Customers() {
       ratePerLitre: String(row.ratePerLitre || 60),
       latitude: row.latitude ?? null,
       longitude: row.longitude ?? null,
+      email: loginFor(row)?.email || '',
+      password: '',
     } : emptyForm(areas[0]?.id || ''));
     setModal(true);
   };
@@ -101,6 +106,7 @@ export default function Customers() {
             <Text style={styles.line}>{hasCoords(c) ? '🗺 Map pin saved' : '🗺 No map pin yet'}</Text>
             <Text style={styles.line}>🥛 {c.milkQuantity} • <Text style={styles.rate}>{s.money(c.ratePerLitre)}/L</Text></Text>
             <Text style={styles.line}>🛵 {c.boy?.name || 'Not assigned'}</Text>
+            <Text style={styles.line}>✉ {loginFor(c)?.email || 'No customer login'}</Text>
             <View style={styles.actions}>
               <Pressable style={styles.edit} onPress={() => open(c)}><Text style={styles.editText}>Edit</Text></Pressable>
               <Pressable style={styles.delete} onPress={() => remove(c.id)}><Text style={styles.deleteText}>Delete</Text></Pressable>
@@ -122,6 +128,8 @@ export default function Customers() {
         />
         <Field label="Daily milk quantity" value={form.milkQuantity} onChangeText={(v) => setForm({ ...form, milkQuantity: v })} placeholder="Example: 1 L / 500 ml" />
         <Field label="Rate per litre (₹)" value={form.ratePerLitre} onChangeText={(v) => setForm({ ...form, ratePerLitre: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder="60" />
+        <Field label="Login email" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoComplete="email" placeholder="Optional — creates a customer login" />
+        <Field label="Login password" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry autoComplete="new-password" placeholder={editing ? 'Leave blank to keep the current password' : '8+ characters if you set an email'} />
         <PrimaryButton title={busy ? 'Saving...' : editing ? 'Update Customer' : 'Save Customer'} onPress={save} disabled={busy} />
         <PrimaryButton title="Cancel" secondary onPress={() => setModal(false)} />
       </SheetModal>

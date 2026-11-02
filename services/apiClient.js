@@ -92,6 +92,59 @@ export async function markDelivered(id, proofUri) {
   const body = await request('/deliveries', { method: 'POST', body: JSON.stringify({ item: { id, status: 'delivered', proofUri } }) });
   return body.item;
 }
+
+function proofFileName(type) {
+  if (String(type).includes('png')) return 'proof.png';
+  if (String(type).includes('webp')) return 'proof.webp';
+  return 'proof.jpg';
+}
+
+export async function uploadDeliveryProof(deliveryId, uri) {
+  const token = await getToken();
+  const base = API_BASE_URL.replace(/\/$/, '');
+  const url = `${base}/delivery-photos${token ? `?access_token=${encodeURIComponent(token)}` : ''}`;
+  const form = new FormData();
+  form.append('deliveryId', String(deliveryId));
+  if (token) form.append('access_token', token);
+  const value = String(uri || '');
+  if (value.startsWith('data:')) {
+    return request('/delivery-photos', { method: 'POST', body: JSON.stringify({ deliveryId, imageBase64: value }) });
+  }
+  if (/^(file:|content:|ph:|assets-library:)/i.test(value)) {
+    form.append('photo', { uri: value, name: 'proof.jpg', type: 'image/jpeg' });
+  } else {
+    const fileRes = await fetch(value);
+    const blob = await fileRes.blob();
+    if (!blob || !blob.size) throw new Error('Could not read the delivery photo.');
+    form.append('photo', blob, proofFileName(blob.type));
+  }
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      body: form,
+      headers: {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}`, 'X-Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    throw new Error('Cannot reach the API server. Check the phone network and API_BASE_URL.');
+  }
+  const text = await response.text().catch(() => '');
+  const body = parseBody(text);
+  if (response.status === 401) throw new Error(body.error || 'Authentication required');
+  if (!response.ok) throw new Error(body.error || body.detail || `API request failed (${response.status})`);
+  return body;
+}
+
+export async function cleanupOldPhotos() {
+  return request('/delivery-photos/cleanup', { method: 'POST', body: '{}' });
+}
+
+export async function ackSkip(id) {
+  return request(`/skip_requests/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ seen: true }) });
+}
 export async function createUser(user) {
   return request('/users', { method: 'POST', body: JSON.stringify(user) });
 }

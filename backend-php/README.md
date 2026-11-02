@@ -63,7 +63,10 @@ Leave it empty to retain the existing local demo-data mode. Then rebuild/restart
 - `GET /bootstrap` — data snapshot and ensures today's pending delivery records for active customers
 - `GET /areas`, `/customers`, `/deliveries`, `/substitutions`, `/leave_requests`, `/bills`, `/users`
 - `POST /areas`, `/customers`, `/deliveries`, `/substitutions`, `/leave_requests`, `/bills`, `/users`
-- `PATCH /deliveries` — delivery users can mark only their own assigned delivery as delivered and submit `proofUri`
+- `POST /delivery-photos` — delivery staff upload the proof image (multipart field `photo` or JSON `imageBase64`). The file is stored on the server and the delivery is marked delivered with that URL.
+- `POST /delivery-photos/cleanup` — admin only. Deletes proof files with `delivery_photos.created_at` older than 30 days and clears those URLs.
+- `GET/POST /skip_requests` — a customer submits a date and reason. That customer is left off the delivery boy's route for the date. Admin sees an alert and can mark it seen.
+- `PATCH /deliveries` — delivery users can mark only their own assigned delivery as delivered. A `file://` proof URI is rejected; upload the photo first.
 - `DELETE /{resource}/{id}` — delete an app record
 
 Every endpoint except health/login requires a bearer token. Admin-only resources are checked server-side. Delivery accounts can only list their own deliveries and mark their own assigned deliveries as delivered.
@@ -76,5 +79,7 @@ The original Node.js WhatsApp relay in `../backend` is preserved. It is a separa
 
 - This API uses `app_records` JSON payloads for flexible app entities while user credentials and sessions have dedicated relational tables. For high-volume production reporting, consider migrating deliveries and bills into fully normalized tables.
 - Daily delivery records are created as pending when `/bootstrap` runs for a new server date; historical delivery rows remain intact.
-- Proof upload currently accepts a proof URI supplied by the client. Before production, add a multipart upload endpoint with file type/size validation and private storage; a local device URI is not itself a server-accessible image.
-- The PHP source has not been executed against your hosting or your live database in this environment. Test the deployment steps and API flows in staging before production use.
+- Passwords are stored only as `password_hash` on `users` and on `login`. Changing a password updates both tables in one transaction. `login` also records each sign-in (user, role, time, success or failure).
+- Customer logins use `users.role = 'customer'` and `users.customer_record_id`, which is the app customer id (`app_records.record_id`, for example `c_1791710244128`). It is not the relational `customers.id`. Do not store the password on the customer record.
+- Existing databases: apply `migrations/2026-11-02-customer-login-photos-skips.sql` before using customer login, photo cleanup, or skip requests. The script only adds a role value, one column, and new tables.
+- Delivery proof files live in `uploads/proofs/` and are served through the API. Direct web access to `uploads/` is denied.

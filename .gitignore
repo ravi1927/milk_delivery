@@ -16,6 +16,8 @@ npm-debug.*
 .env.*
 !.env.example
 backend-php/.env
+backend-php/uploads/
+milk-delivery-api-upload/uploads/
 *.log
 .DS_Store
 Thumbs.db
