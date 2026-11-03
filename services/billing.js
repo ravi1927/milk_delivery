@@ -57,21 +57,92 @@ export function defaultStart(bills, customer, endKey) {
   return customer.createdOn && customer.createdOn > first && customer.createdOn <= endKey ? customer.createdOn : first;
 }
 
+export function skipCustomerId(skip) {
+  return String(skip?.customerRecordId || skip?.customerId || '');
+}
+export function skipDate(skip) {
+  return String(skip?.date || skip?.skipDate || skip?.skip_date || '').slice(0, 10);
+}
+
+/** Distinct skip_requests dates for this customer inside an inclusive YYYY-MM-DD range. */
+export function skippedDatesInPeriod(skips, customerId, start, end) {
+  if (!start || !end || start > end) return [];
+  const id = String(customerId ?? '');
+  const dates = new Set();
+  for (const skip of skips || []) {
+    if (skipCustomerId(skip) !== id) continue;
+    const date = skipDate(skip);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date >= start && date <= end) dates.add(date);
+  }
+  return [...dates].sort();
+}
+
+/**
+ * Overlap of the selected period with the customer's active dates.
+ * Days before createdOn, and days after a stopped customer’s stoppedOn, are outside the window.
+ */
+export function billWindow(customer, start, end) {
+  let from = start;
+  let to = end;
+  if (customer?.createdOn && customer.createdOn > from) from = customer.createdOn;
+  if (customer && customer.active === false && customer.stoppedOn && customer.stoppedOn < to) to = customer.stoppedOn;
+  if (from > to) return { start: from, end: shiftKey(from, -1) };
+  return { start: from, end: to };
+}
+
 /**
  * Work out one customer's bill.
- *  mode 'period'    → every day in the period × daily litres × rate   (e.g. 30 days)
- *  mode 'delivered' → only days with a DELIVERED record in the period
+ *  mode 'period'    → (days in the window − skip dates) × daily litres × rate
+ *  mode 'delivered' → delivered records in the window, except dates that were skipped
+ * Skip dates never add litres or amount.
  */
-export function computeBill({ customer, start, end, deliveries = [], mode = 'period' }) {
+export function computeBill({ customer, start, end, deliveries = [], skips = [], mode = 'period' }) {
   const dailyLitres = parseLitres(customer.milkQuantity);
   const rate = Number(customer.ratePerLitre || 0);
-  const periodDays = start > end ? 0 : daysBetween(start, end);
+  const periodDays = !start || !end || start > end ? 0 : daysBetween(start, end);
+  const skippedDates = skippedDatesInPeriod(skips, customer?.id, start, end);
+  const skippedDays = skippedDates.length;
+  const skipSet = new Set(skippedDates);
   const days = mode === 'delivered'
-    ? deliveries.filter((d) => d.customerId === customer.id && d.status === 'delivered' && d.date >= start && d.date <= end).length
-    : periodDays;
+    ? deliveries.filter((d) => String(d.customerId) === String(customer.id) && d.status === 'delivered' && d.date >= start && d.date <= end && !skipSet.has(d.date)).length
+    : Math.max(0, periodDays - skippedDays);
   const litres = round2(dailyLitres * days);
   const amount = round2(litres * rate);
-  return { dailyLitres, rate, periodDays, days, litres, amount, mode };
+  return { dailyLitres, rate, periodDays, skippedDays, skippedDates, days, billedDays: days, litres, amount, mode };
+}
+
+/** One spreadsheet row per customer for a selected period. Skipped days are excluded from litres and amount. */
+export function customerConsumptionRows({ customers = [], areas = [], skips = [], start, end, deliveries = [], mode = 'period' }) {
+  const areaName = (id) => areas.find((a) => String(a.id) === String(id))?.name || '—';
+  return [...customers].map((customer) => {
+    const window = billWindow(customer, start, end);
+    const calc = computeBill({ customer, start: window.start, end: window.end, deliveries, skips, mode });
+    return {
+      id: customer.id,
+      name: customer.name || 'Customer',
+      area: areaName(customer.areaId),
+      rate: calc.rate,
+      billedDays: calc.days,
+      skippedDays: calc.skippedDays,
+      litres: calc.litres,
+      amount: calc.amount,
+      periodDays: calc.periodDays,
+      dailyLitres: calc.dailyLitres,
+      start: window.start,
+      end: window.end,
+      milkQuantity: customer.milkQuantity || '',
+      phone: customer.phone || '',
+    };
+  }).sort((a, b) => a.area.localeCompare(b.area) || a.name.localeCompare(b.name));
+}
+
+export function consumptionTotals(rows) {
+  return {
+    billedDays: rows.reduce((n, r) => n + Number(r.billedDays || 0), 0),
+    skippedDays: rows.reduce((n, r) => n + Number(r.skippedDays || 0), 0),
+    litres: round2(rows.reduce((n, r) => n + Number(r.litres || 0), 0)),
+    amount: round2(rows.reduce((n, r) => n + Number(r.amount || 0), 0)),
+  };
 }
 
 export const fmtAmount = (n) => {
@@ -89,9 +160,11 @@ export function buildMessage(bill) {
     '',
     `Your milk bill from ${BUSINESS.name} for ${niceDate(bill.periodStart)} to ${niceDate(bill.periodEnd)}:`,
     '',
-    `Milk: ${bill.milkQuantity} per day × ${bill.days} day${bill.days === 1 ? '' : 's'} = ${fmtLitres(bill.litres)}`,
+    `Milk: ${bill.milkQuantity} per day × ${bill.days} billed day${bill.days === 1 ? '' : 's'} = ${fmtLitres(bill.litres)}`,
+    `Skipped days (not charged): ${Number(bill.skippedDays || 0)}`,
     `Rate: ${fmtAmount(bill.ratePerLitre)} per litre`,
     `*Total amount to pay: ${fmtAmount(bill.amount)}*`,
+    'Amount = billed days × daily litres × rate. Dates in skip requests are left out.',
   ];
   if (BUSINESS.paymentNote) lines.push('', BUSINESS.paymentNote);
   lines.push('', `Thank you,`, `${BUSINESS.name}`);

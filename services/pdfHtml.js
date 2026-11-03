@@ -1,7 +1,7 @@
 // Builds the HTML that is turned into PDFs. Pure functions – no React / storage imports.
 import { LOGO_DATA_URI } from '../constants/logoBase64';
 import { BUSINESS } from '../constants/business';
-import { fmtAmount, fmtLitres, messageProblem, niceDate, round2, SENT_STATES } from './billing';
+import { consumptionTotals, customerConsumptionRows, fmtAmount, fmtLitres, messageProblem, niceDate, round2, SENT_STATES } from './billing';
 
 export const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -127,11 +127,14 @@ export function billsReportHtml({ title = 'Billing Summary', subtitle = '', bill
   const ok = sorted.filter((b) => SENT_STATES.includes(b.wa?.status));
   const problems = sorted.filter((b) => !SENT_STATES.includes(b.wa?.status));
   let body = `<div class="cards">${card(sorted.length, 'Bills')}${card(fmtLitres(litres), 'Total litres')}${card(fmtAmount(total), 'Total amount')}${card(ok.length, 'Messages sent')}${card(problems.length, 'Not sent / failed')}</div>`;
+  const skippedSum = sorted.reduce((n, b) => n + Number(b.skippedDays || 0), 0);
+  const billedSum = sorted.reduce((n, b) => n + Number(b.days || 0), 0);
   body += `<h3>Customer bills</h3>${table(
-    [['Customer'], ['Mobile'], ['Period'], ['Days', 'r'], ['Litres', 'r'], ['Rate', 'r'], ['Amount', 'r'], ['WhatsApp']],
-    sorted.map((b) => tr([[b.customerName], [b.phone ? `+${b.phone}` : 'Missing'], [`${b.periodStart} to ${b.periodEnd}`], [b.days, 'r'], [fmtLitres(b.litres), 'r'], [fmtAmount(b.ratePerLitre), 'r'], [fmtAmount(b.amount), 'r'], [waText(b), SENT_STATES.includes(b.wa?.status) ? 'ok' : 'bad']])),
-    `<tr class="total"><td colspan="4">Total</td><td class="r">${esc(fmtLitres(litres))}</td><td></td><td class="r">${esc(fmtAmount(total))}</td><td></td></tr>`,
+    [['Customer'], ['Mobile'], ['Period'], ['Billed days', 'r'], ['Skipped days', 'r'], ['Litres', 'r'], ['Rate', 'r'], ['Amount', 'r'], ['WhatsApp']],
+    sorted.map((b) => tr([[b.customerName], [b.phone ? `+${b.phone}` : 'Missing'], [`${b.periodStart} to ${b.periodEnd}`], [b.days, 'r'], [Number(b.skippedDays || 0), 'r'], [fmtLitres(b.litres), 'r'], [fmtAmount(b.ratePerLitre), 'r'], [fmtAmount(b.amount), 'r'], [waText(b), SENT_STATES.includes(b.wa?.status) ? 'ok' : 'bad']])),
+    `<tr class="total"><td colspan="3">Total</td><td class="r">${esc(billedSum)}</td><td class="r">${esc(skippedSum)}</td><td class="r">${esc(fmtLitres(litres))}</td><td></td><td class="r">${esc(fmtAmount(total))}</td><td></td></tr>`,
   )}`;
+  body += '<p class="note">Amount = billed days × daily litres × rate. Skipped days are dates in skip requests and are not charged.</p>';
   if (problems.length) {
     body += `<h3>Messages not delivered – action needed</h3>${table(
       [['Customer'], ['Mobile'], ['Amount', 'r'], ['Reason']],
@@ -150,11 +153,27 @@ export function invoiceHtml(bill) {
     ${line('Billing period', `${niceDate(bill.periodStart)} to ${niceDate(bill.periodEnd)}`)}
     ${line('Daily milk', bill.milkQuantity)}
     ${line('Days billed', `${bill.days}${bill.basis === 'delivered' ? ' (delivered days only)' : ''}`)}
-    ${line('Total litres', fmtLitres(bill.litres))}
+    ${line('Days skipped', Number(bill.skippedDays || 0))}
+    ${line('Litres consumed', fmtLitres(bill.litres))}
     ${line('Rate per litre', fmtAmount(bill.ratePerLitre))}
     <div class="row" style="border:none"><span>Total amount to pay</span><span class="big">${esc(fmtAmount(bill.amount))}</span></div>
   </div>
+  <p class="note">Amount = billed days × daily litres × rate. Dates the customer skipped are not charged.</p>
   ${BUSINESS.paymentNote ? `<p class="note">${esc(BUSINESS.paymentNote)}</p>` : ''}
   <p class="note">Thank you for choosing ${esc(BUSINESS.name)}.</p>`;
   return page('Milk Bill', `${niceDate(bill.periodStart)} – ${niceDate(bill.periodEnd)}`, body);
+}
+
+// ───────────────────────── Customer consumption spreadsheet (PDF) ─────────────────────────
+export function consumptionReportHtml({ customers, areas, skips, deliveries, start, end }) {
+  const rows = customerConsumptionRows({ customers, areas, skips, deliveries, start, end, mode: 'period' });
+  const t = consumptionTotals(rows);
+  const body = `<p class="note">Each amount is billed days × daily litres × rate. A skip request date inside the period is a skipped day and is not charged. Days before the customer was added, and days after a stopped customer’s stop date, are left out.</p>
+  <div class="cards">${card(rows.length, 'Customers')}${card(t.billedDays, 'Billed days')}${card(t.skippedDays, 'Skipped days')}${card(fmtLitres(t.litres), 'Litres consumed')}${card(fmtAmount(t.amount), 'Total amount')}</div>
+  <h3>Customer totals</h3>${table(
+    [['Name'], ['Area'], ['Rate / L', 'r'], ['Billed days', 'r'], ['Skipped days', 'r'], ['Litres', 'r'], ['Amount', 'r']],
+    rows.map((r) => tr([[r.name], [r.area], [fmtAmount(r.rate), 'r'], [r.billedDays, 'r'], [r.skippedDays, 'r'], [fmtLitres(r.litres), 'r'], [fmtAmount(r.amount), 'r']])),
+    `<tr class="total"><td colspan="3">Total</td><td class="r">${esc(t.billedDays)}</td><td class="r">${esc(t.skippedDays)}</td><td class="r">${esc(fmtLitres(t.litres))}</td><td class="r">${esc(fmtAmount(t.amount))}</td></tr>`,
+  )}`;
+  return page('Customer totals', `${niceDate(start)} – ${niceDate(end)}`, body);
 }

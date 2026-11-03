@@ -2,17 +2,29 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Header from '../../components/Header';
+import SheetTable from '../../components/SheetTable';
 import { PrimaryButton, SectionTitle } from '../../components/Field';
 import { ResponsiveContainer } from '../../components/ResponsiveScreen';
 import * as s from '../../services/store';
 import * as wa from '../../services/whatsapp';
 import { exportPdf } from '../../services/pdf';
 import { billsReportHtml, invoiceHtml } from '../../services/pdfHtml';
+import { exportCsv } from '../../services/sheet';
 import {
   billingDayFor, computeBill, cycleDueKey, defaultStart, fmtAmount, fmtLitres, isBillingDue, isMessageOk,
-  lastBilledEnd, messageProblem, niceDate, normalizePhone, shiftKey,
+  lastBilledEnd, messageProblem, niceDate, normalizePhone, round2, shiftKey, skippedDatesInPeriod,
 } from '../../services/billing';
 import { colors } from '../../constants/theme';
+
+const SHEET_COLUMNS = [
+  { key: 'name', label: 'Name', width: 150 },
+  { key: 'area', label: 'Area', width: 120 },
+  { key: 'rate', label: 'Rate / litre', width: 100, align: 'right' },
+  { key: 'billedDays', label: 'Billed days', width: 100, align: 'right' },
+  { key: 'skippedDays', label: 'Skipped days', width: 110, align: 'right' },
+  { key: 'litres', label: 'Litres consumed', width: 120, align: 'right' },
+  { key: 'amount', label: 'Amount', width: 110, align: 'right' },
+];
 
 const STATUS_STYLE = {
   pending: ['NOT SENT', colors.warningBg, colors.warning],
@@ -28,6 +40,8 @@ export default function Billing() {
   const [customers, setCustomers] = useState([]);
   const [bills, setBills] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
+  const [skips, setSkips] = useState([]);
+  const [areas, setAreas] = useState([]);
   const [end, setEnd] = useState(() => { const due = cycleDueKey(today); return today < due ? today : due; });
   const [mode, setMode] = useState('period'); // 'period' = every day in the period, 'delivered' = delivered days only
   const [selected, setSelected] = useState([]);
@@ -40,8 +54,8 @@ export default function Billing() {
 
   const reload = useCallback(async () => {
     try {
-      const [c, b, d] = await Promise.all([s.getCustomers(), s.getBills(), s.getDeliveries()]);
-      setCustomers(c); setBills(b); setDeliveries(d);
+      const [c, b, d, sk, a] = await Promise.all([s.getCustomers(), s.getBills(), s.getDeliveries(), s.getSkipRequests(), s.getAreas()]);
+      setCustomers(c); setBills(b); setDeliveries(d); setSkips(sk); setAreas(a);
       return b;
     } catch (e) {
       Alert.alert('Could not load bills', e.message);
@@ -60,15 +74,15 @@ export default function Billing() {
   const preview = useMemo(() => customers.map((c) => {
     const effEnd = !c.active && c.stoppedOn && c.stoppedOn < end ? c.stoppedOn : end;
     const start = defaultStart(bills, c, effEnd);
-    const calc = computeBill({ customer: c, start, end: effEnd, deliveries, mode });
+    const calc = computeBill({ customer: c, start, end: effEnd, deliveries, skips, mode });
     const phone = normalizePhone(c.phone);
     let issue = null;
     if (start > effEnd) issue = `Already billed till ${niceDate(lastBilledEnd(bills, c.id) || effEnd)}`;
-    else if (!calc.days) issue = 'No delivered days in this period';
+    else if (!calc.days) issue = calc.skippedDays ? `All ${calc.skippedDays} day(s) in this period are skipped` : (mode === 'delivered' ? 'No delivered days in this period' : 'No days in this period');
     else if (!calc.litres) issue = 'Milk quantity is empty – edit customer';
     else if (!c.ratePerLitre) issue = 'Rate per litre is empty – edit customer';
     return { c, start, end: effEnd, calc, phone, issue };
-  }).filter((p) => p.c.active || !(p.start > p.end)), [customers, bills, deliveries, end, mode]);
+  }).filter((p) => p.c.active || !(p.start > p.end)), [customers, bills, deliveries, skips, end, mode]);
 
   const billable = preview.filter((p) => !p.issue);
   useEffect(() => {
@@ -77,6 +91,40 @@ export default function Billing() {
   const toggle = (id) => setSelected((x) => (x.includes(id) ? x.filter((y) => y !== id) : [...x, id]));
   const chosen = billable.filter((p) => selected.includes(p.c.id));
   const total = chosen.reduce((n, p) => n + p.calc.amount, 0);
+  const areaName = (id) => areas.find((a) => String(a.id) === String(id))?.name || '—';
+  const skippedOnBill = (b) => (
+    b.skippedDays != null && b.skippedDays !== ''
+      ? Number(b.skippedDays)
+      : skippedDatesInPeriod(skips, b.customerId, b.periodStart, b.periodEnd).length
+  );
+  const withSkips = (b) => ({ ...b, skippedDays: skippedOnBill(b) });
+  const billSheet = preview.map((p) => ({
+    id: p.c.id,
+    name: p.c.name || 'Customer',
+    area: areaName(p.c.areaId),
+    rate: fmtAmount(p.calc.rate),
+    billedDays: String(p.calc.days),
+    skippedDays: String(p.calc.skippedDays),
+    litres: fmtLitres(p.calc.litres),
+    amount: fmtAmount(p.calc.amount),
+  }));
+  const billSheetTotals = {
+    name: 'Total',
+    area: '',
+    rate: '',
+    billedDays: String(preview.reduce((n, p) => n + p.calc.days, 0)),
+    skippedDays: String(preview.reduce((n, p) => n + p.calc.skippedDays, 0)),
+    litres: fmtLitres(preview.reduce((n, p) => n + p.calc.litres, 0)),
+    amount: fmtAmount(preview.reduce((n, p) => n + p.calc.amount, 0)),
+  };
+  const downloadBillSheet = async () => {
+    try {
+      const headers = ['Name', 'Area', 'Rate per litre', 'Billed days', 'Skipped days', 'Litres consumed', 'Amount'];
+      const data = preview.map((p) => [p.c.name || 'Customer', areaName(p.c.areaId), p.calc.rate, p.calc.days, p.calc.skippedDays, p.calc.litres, p.calc.amount]);
+      data.push(['Total', '', '', preview.reduce((n, p) => n + p.calc.days, 0), preview.reduce((n, p) => n + p.calc.skippedDays, 0), round2(preview.reduce((n, p) => n + p.calc.litres, 0)), round2(preview.reduce((n, p) => n + p.calc.amount, 0))]);
+      await exportCsv(`bills-${end}.csv`, headers, data);
+    } catch (e) { Alert.alert('CSV failed', e.message); }
+  };
 
   const dueNow = isBillingDue(today);
   const dueKey = cycleDueKey(today);
@@ -88,7 +136,7 @@ export default function Billing() {
     try {
       const drafts = chosen.map((p) => ({
         customerId: p.c.id, customerName: p.c.name, phone: p.phone, milkQuantity: p.c.milkQuantity, ratePerLitre: Number(p.c.ratePerLitre),
-        periodStart: p.start, periodEnd: p.end, days: p.calc.days, litres: p.calc.litres, amount: p.calc.amount, basis: mode,
+        periodStart: p.start, periodEnd: p.end, days: p.calc.days, skippedDays: p.calc.skippedDays, litres: p.calc.litres, amount: p.calc.amount, basis: mode,
       }));
       const { created, skipped } = await s.createBills(drafts);
       await reload();
@@ -196,7 +244,10 @@ export default function Billing() {
           <Pressable key={k} style={[styles.segBtn, mode === k && styles.segOn]} onPress={() => setMode(k)}><Text style={[styles.segTxt, mode === k && styles.segTxtOn]}>{label}</Text></Pressable>
         ))}
       </View>
-      <Text style={styles.hint}>{mode === 'period' ? 'Amount = daily litres × rate × number of days in the period (e.g. 30 days).' : 'Amount counts only days marked DELIVERED in the app. Days when the app was not used are not counted.'}</Text>
+      <Text style={styles.hint}>{mode === 'period' ? 'Amount = billed days × daily litres × rate. A skip request date in the period is not a billed day, so it adds no litres and no amount.' : 'Amount counts delivered days only, and still leaves out any date that has a skip request.'}</Text>
+
+      <SheetTable columns={SHEET_COLUMNS} rows={billSheet} totals={preview.length ? billSheetTotals : null} />
+      <PrimaryButton title="Download CSV • this bill list" secondary onPress={downloadBillSheet} disabled={!preview.length} />
 
       <View style={styles.selRow}>
         <Text style={styles.selTitle}>{chosen.length} selected • {fmtAmount(total)}</Text>
@@ -211,7 +262,7 @@ export default function Billing() {
             <View style={[styles.check, on && styles.checkOn]}>{on && <Text style={styles.tick}>✓</Text>}</View>
             <View style={{ flex: 1 }}>
               <Text style={styles.name}>{p.c.name}{!p.c.active ? '  (stopped)' : ''}</Text>
-              {p.issue ? <Text style={styles.bad}>{p.issue}</Text> : <Text style={styles.meta}>{p.start} → {p.end} • {p.calc.days} days • {fmtLitres(p.calc.litres)} × {fmtAmount(p.calc.rate)}</Text>}
+              {p.issue ? <Text style={styles.bad}>{p.issue}</Text> : <Text style={styles.meta}>{p.start} → {p.end} • billed {p.calc.days} days • skipped {p.calc.skippedDays} • {fmtLitres(p.calc.litres)} × {fmtAmount(p.calc.rate)}</Text>}
               {!p.phone && <Text style={styles.bad}>Mobile number missing / invalid – WhatsApp cannot be sent</Text>}
             </View>
             {!p.issue && <Text style={styles.amount}>{fmtAmount(p.calc.amount)}</Text>}
@@ -228,7 +279,7 @@ export default function Billing() {
       </View>
       <PrimaryButton title={progress || `Send all pending (${queueable(pendingList).length})`} onPress={() => sendMany(pendingList)} disabled={busy || !queueable(pendingList).length} />
       {wa.isApiMode() && <PrimaryButton title="Refresh delivery status" secondary onPress={refresh} disabled={busy} />}
-      <PrimaryButton title="Export billing summary PDF" secondary onPress={() => pdfFor(() => billsReportHtml({ title: filter === 'action' ? 'Messages Needing Action' : filter === 'sent' ? 'Messages Sent' : 'Billing Summary', subtitle: filter === 'action' ? 'Not sent / failed' : filter === 'sent' ? 'Sent to customers' : 'All bills', bills: shown }), 'Billing summary')} disabled={!shown.length} />
+      <PrimaryButton title="Export billing summary PDF" secondary onPress={() => pdfFor(() => billsReportHtml({ title: filter === 'action' ? 'Messages Needing Action' : filter === 'sent' ? 'Messages Sent' : 'Billing Summary', subtitle: filter === 'action' ? 'Not sent / failed' : filter === 'sent' ? 'Sent to customers' : 'All bills', bills: shown.map(withSkips) }), 'Billing summary')} disabled={!shown.length} />
 
       <View style={styles.seg}>
         {[['action', `Needs action (${counts.action})`], ['sent', `Sent (${counts.sent})`], ['all', 'All']].map(([k, label]) => (
@@ -244,7 +295,8 @@ export default function Billing() {
             <View style={styles.billTop}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>{b.customerName}</Text>
-                <Text style={styles.meta}>{b.periodStart} → {b.periodEnd} • {b.days} days • {fmtLitres(b.litres)}</Text>
+                <Text style={styles.meta}>{b.periodStart} → {b.periodEnd}</Text>
+                <Text style={styles.meta}>Billed days {b.days} • skipped days {skippedOnBill(b)} • {fmtLitres(b.litres)} • {fmtAmount(b.ratePerLitre)} / L</Text>
                 <Text style={styles.meta}>{b.phone ? `+${b.phone}` : 'No valid mobile number'}</Text>
               </View>
               <View style={{ alignItems: 'flex-end' }}>
@@ -262,7 +314,7 @@ export default function Billing() {
               ) : !isMessageOk(b) ? (
                 <Pressable style={styles.act} disabled={busy} onPress={() => sendOne(b)}><Text style={styles.actTxt}>{b.wa?.status === 'failed' ? 'Retry' : 'Send'}</Text></Pressable>
               ) : null}
-              <Pressable style={styles.actGhost} onPress={() => pdfFor(() => invoiceHtml(b), `Bill – ${b.customerName}`)}><Text style={styles.actGhostTxt}>PDF</Text></Pressable>
+              <Pressable style={styles.actGhost} onPress={() => pdfFor(() => invoiceHtml(withSkips(b)), `Bill – ${b.customerName}`)}><Text style={styles.actGhostTxt}>PDF</Text></Pressable>
               <Pressable style={styles.actGhost} onPress={() => remove(b)}><Text style={[styles.actGhostTxt, { color: colors.danger }]}>Delete</Text></Pressable>
             </View>
           </View>

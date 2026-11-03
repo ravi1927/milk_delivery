@@ -6,7 +6,9 @@ import { Field, PrimaryButton, SectionTitle } from '../components/Field';
 import { ResponsiveContainer } from '../components/ResponsiveScreen';
 import { useAuth } from '../context/AuthContext';
 import * as s from '../services/store';
-import { niceDate } from '../services/billing';
+import { exportPdf } from '../services/pdf';
+import { invoiceHtml } from '../services/pdfHtml';
+import { billWindow, computeBill, daysInMonth, fmtAmount, fmtLitres, niceDate, normalizePhone, skippedDatesInPeriod } from '../services/billing';
 import { colors } from '../constants/theme';
 
 const WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -35,17 +37,19 @@ export default function CustomerProfile() {
   const [cursor, setCursor] = useState({ year: now.getFullYear(), month: now.getMonth() });
   const [customer, setCustomer] = useState(null);
   const [skips, setSkips] = useState([]);
+  const [bills, setBills] = useState([]);
   const [selected, setSelected] = useState(today);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
     try {
-      const [customers, skipRows] = await Promise.all([s.getCustomers(), s.getSkipRequests()]);
+      const [customers, skipRows, billRows] = await Promise.all([s.getCustomers(), s.getSkipRequests(), s.getBills()]);
       const linked = customers.find((c) => String(c.id) === String(user?.customerRecordId));
       const mine = linked || (customers.length === 1 ? customers[0] : null);
       setCustomer(mine);
       setSkips(skipRows);
+      setBills(billRows);
     } catch (e) { Alert.alert('Could not load profile', e.message); }
   };
   useFocusEffect(useCallback(() => { load(); }, [user?.customerRecordId]));
@@ -105,6 +109,48 @@ export default function CustomerProfile() {
     ]);
   };
 
+  const monthBill = useMemo(() => {
+    if (!customer) return null;
+    const start = dateFor(cursor.year, cursor.month, 1);
+    const end = dateFor(cursor.year, cursor.month, daysInMonth(cursor.year, cursor.month));
+    const window = billWindow(customer, start, end);
+    const calc = computeBill({ customer, start: window.start, end: window.end, skips, mode: 'period' });
+    return {
+      periodStart: window.start,
+      periodEnd: window.end > window.start ? window.end : window.start,
+      empty: window.start > window.end,
+      calc,
+      pdf: {
+        customerName: customer.name || user?.name || 'Customer',
+        phone: normalizePhone(customer.phone),
+        periodStart: window.start,
+        periodEnd: window.end > window.start ? window.end : window.start,
+        milkQuantity: customer.milkQuantity || '',
+        days: calc.days,
+        skippedDays: calc.skippedDays,
+        litres: calc.litres,
+        ratePerLitre: calc.rate,
+        amount: calc.amount,
+        basis: 'period',
+      },
+    };
+  }, [customer, cursor, skips, user?.name]);
+  const myBills = useMemo(() => {
+    const id = String(customer?.id || user?.customerRecordId || '');
+    return bills.filter((b) => String(b.customerId) === id).sort((a, b) => String(b.periodEnd || '').localeCompare(String(a.periodEnd || '')));
+  }, [bills, customer?.id, user?.customerRecordId]);
+
+  const skipCount = (bill) => (
+    bill.skippedDays != null && bill.skippedDays !== ''
+      ? Number(bill.skippedDays)
+      : skippedDatesInPeriod(skips, bill.customerId || customer?.id, bill.periodStart, bill.periodEnd).length
+  );
+
+  const savePdf = async (bill, title) => {
+    try { await exportPdf(invoiceHtml(bill), title); }
+    catch (e) { Alert.alert('PDF failed', e.message); }
+  };
+
   const selectedSkip = skipByDate.get(selected);
   const cells = cellsFor(cursor.year, cursor.month);
 
@@ -141,6 +187,36 @@ export default function CustomerProfile() {
         <Text style={styles.line}>Rate: {customer ? `${s.money(customer.ratePerLitre)} per litre` : 'Not set'}</Text>
         <Text style={styles.note}>These details can only be changed by the dairy admin.</Text>
       </View>
+
+      <SectionTitle title={`Bill for ${monthLabel(cursor.year, cursor.month)}`} subtitle="Amount = billed days × daily litres × rate. A date you skip is not charged." />
+      {monthBill && (
+        <View style={styles.card}>
+          <Text style={styles.line}>{monthBill.empty ? 'No delivery days in this month.' : `${niceDate(monthBill.periodStart)} to ${niceDate(monthBill.periodEnd)}`}</Text>
+          <Text style={styles.line}>Billed days: {monthBill.calc.days}</Text>
+          <Text style={styles.line}>Skipped days: {monthBill.calc.skippedDays}</Text>
+          <Text style={styles.line}>Litres consumed: {fmtLitres(monthBill.calc.litres)}</Text>
+          <Text style={styles.line}>Rate: {fmtAmount(monthBill.calc.rate)} per litre</Text>
+          <Text style={styles.amount}>Amount: {fmtAmount(monthBill.calc.amount)}</Text>
+          {!monthBill.empty && <PrimaryButton title="Download PDF" secondary onPress={() => savePdf(monthBill.pdf, `Bill ${monthBill.periodStart}`)} />}
+        </View>
+      )}
+
+      <SectionTitle title="Saved bills" subtitle="Bills the dairy has already created for you." />
+      {!myBills.length && <Text style={styles.empty}>No saved bill yet. The month above is what this period comes to.</Text>}
+      {myBills.map((bill) => (
+        <View key={bill.id} style={styles.card}>
+          <Text style={styles.skipDate}>{niceDate(bill.periodStart)} to {niceDate(bill.periodEnd)}</Text>
+          <Text style={styles.line}>Billed days: {bill.days}</Text>
+          <Text style={styles.line}>Skipped days: {skipCount(bill)}</Text>
+          <Text style={styles.line}>Litres consumed: {fmtLitres(bill.litres)}</Text>
+          <Text style={styles.line}>Rate: {fmtAmount(bill.ratePerLitre)} per litre</Text>
+          <Text style={styles.amount}>Amount: {fmtAmount(bill.amount)}</Text>
+          {bill.skippedDays == null && skipCount(bill) > 0 && (
+            <Text style={styles.locked}>These skipped days come from your skip requests. This saved amount was worked out before skipped days were taken off.</Text>
+          )}
+          <PrimaryButton title="Download PDF" secondary onPress={() => savePdf({ ...bill, skippedDays: skipCount(bill) }, `Bill ${bill.periodStart}`)} />
+        </View>
+      ))}
 
       <SectionTitle title="Delivery calendar" subtitle="Every date is a delivery day unless you skip it. Choose a date, add a reason, and submit." />
       <View style={styles.monthRow}>
@@ -214,6 +290,7 @@ const styles = StyleSheet.create({
   empty: { color: colors.muted, marginBottom: 8 },
   skipRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.card, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
   skipCopy: { flex: 1 },
+  amount: { color: colors.secondaryDark, fontWeight: '900', fontSize: 18, marginTop: 10, marginBottom: 8 },
   skipDate: { fontWeight: '900', color: colors.text, fontSize: 15 },
   locked: { color: colors.warning, marginTop: 6, fontSize: 12, fontWeight: '700', lineHeight: 18 },
   undo: { backgroundColor: colors.infoBg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
