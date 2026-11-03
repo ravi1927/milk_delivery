@@ -145,6 +145,9 @@ export async function cleanupOldPhotos() {
 export async function ackSkip(id) {
   return request(`/skip_requests/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ seen: true }) });
 }
+export async function undoSkip(id) {
+  return request(`/skip_requests/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ undo: true }) });
+}
 export async function createUser(user) {
   return request('/users', { method: 'POST', body: JSON.stringify(user) });
 }

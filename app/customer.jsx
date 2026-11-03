@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Header from '../components/Header';
 import { Field, PrimaryButton, SectionTitle } from '../components/Field';
 import { ResponsiveContainer } from '../components/ResponsiveScreen';
 import { useAuth } from '../context/AuthContext';
 import * as s from '../services/store';
+import { niceDate } from '../services/billing';
 import { colors } from '../constants/theme';
 
 const WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -37,22 +38,6 @@ export default function CustomerProfile() {
   const [selected, setSelected] = useState(today);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
-  const scrollRef = useRef(null);
-  const reasonFocused = useRef(false);
-
-  const scrollReasonIntoView = useCallback(() => {
-    const run = () => scrollRef.current?.scrollToEnd({ animated: true });
-    setTimeout(run, Platform.OS === 'ios' ? 60 : 120);
-    setTimeout(run, 280);
-  }, []);
-
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const sub = Keyboard.addListener(showEvent, () => {
-      if (reasonFocused.current) scrollReasonIntoView();
-    });
-    return () => sub.remove();
-  }, [scrollReasonIntoView]);
 
   const load = async () => {
     try {
@@ -65,11 +50,16 @@ export default function CustomerProfile() {
   };
   useFocusEffect(useCallback(() => { load(); }, [user?.customerRecordId]));
 
+  const mySkips = useMemo(() => {
+    const mine = String(user?.customerRecordId || customer?.id || '');
+    const rows = mine ? skips.filter((row) => String(row.customerRecordId || '') === mine) : skips;
+    return [...rows].sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  }, [skips, user?.customerRecordId, customer?.id]);
   const skipByDate = useMemo(() => {
     const map = new Map();
-    skips.forEach((row) => map.set(row.date, row));
+    mySkips.forEach((row) => map.set(String(row.date || '').slice(0, 10), row));
     return map;
-  }, [skips]);
+  }, [mySkips]);
 
   const shiftMonth = (amount) => {
     const next = new Date(cursor.year, cursor.month + amount, 1);
@@ -78,6 +68,10 @@ export default function CustomerProfile() {
 
   const submit = async () => {
     if (busy) return;
+    if (!selected || selected <= today) {
+      Alert.alert('Choose a later date', s.SKIP_DATE_MESSAGE);
+      return;
+    }
     setBusy(true);
     try {
       await s.requestSkip({ date: selected, reason });
@@ -88,11 +82,56 @@ export default function CustomerProfile() {
     finally { setBusy(false); }
   };
 
+  const runUndo = async (row) => {
+    setBusy(true);
+    try {
+      await s.undoSkip(row.id);
+      await load();
+      Alert.alert('Skip removed', `${String(row.date || '').slice(0, 10)} is a delivery day again.`);
+    } catch (e) { Alert.alert('Could not undo', e.message); }
+    finally { setBusy(false); }
+  };
+
+  const undo = (row) => {
+    if (busy || !row) return;
+    const day = String(row.date || '').slice(0, 10);
+    if (!day || day <= today) {
+      Alert.alert('Cannot undo', s.UNDO_SKIP_MESSAGE);
+      return;
+    }
+    Alert.alert('Undo this skip?', `${day} goes back on the delivery route. The dairy will no longer see this skip.`, [
+      { text: 'Keep skip', style: 'cancel' },
+      { text: 'Undo', onPress: () => runUndo(row) },
+    ]);
+  };
+
   const selectedSkip = skipByDate.get(selected);
   const cells = cellsFor(cursor.year, cursor.month);
 
+  const skipForm = (
+    <View style={styles.card}>
+      <Text style={styles.selectedLabel}>{selected}</Text>
+      <Text style={styles.hint}>{s.SKIP_DATE_MESSAGE}</Text>
+      {selectedSkip ? (
+        <>
+          <Text style={styles.line}>Already skipped. Reason: {selectedSkip.reason}</Text>
+          {selected > today ? (
+            <PrimaryButton title={busy ? 'Undoing...' : 'Undo skip'} secondary onPress={() => undo(selectedSkip)} disabled={busy} />
+          ) : (
+            <Text style={styles.locked}>{s.UNDO_SKIP_MESSAGE}</Text>
+          )}
+        </>
+      ) : (
+        <>
+          <Field label="Reason for skipping this date" value={reason} onChangeText={setReason} placeholder="Example: Out of town" multiline inputStyle={styles.reasonInput} />
+          <PrimaryButton title={busy ? 'Sending...' : 'Submit skip'} onPress={submit} disabled={busy || !reason.trim()} />
+        </>
+      )}
+    </View>
+  );
+
   return (
-    <ResponsiveContainer scrollRef={scrollRef} avoidKeyboard>
+    <ResponsiveContainer avoidKeyboard footer={skipForm}>
       <Header title="My profile" subtitle="Read only" />
       <View style={styles.card}>
         <Text style={styles.name}>{customer?.name || user?.name || 'Customer'}</Text>
@@ -125,17 +164,27 @@ export default function CustomerProfile() {
         })}
       </View>
 
-      <View style={styles.card}>
-        <Text style={styles.selected}>{selected}</Text>
-        {selectedSkip ? (
-          <Text style={styles.line}>Already skipped. Reason: {selectedSkip.reason}</Text>
-        ) : (
-          <>
-            <Field label="Reason for skipping this date" value={reason} onChangeText={setReason} placeholder="Example: Out of town" multiline onFocus={() => { reasonFocused.current = true; scrollReasonIntoView(); }} onBlur={() => { reasonFocused.current = false; }} />
-            <PrimaryButton title={busy ? 'Sending...' : 'Submit skip'} onPress={submit} disabled={busy || !reason.trim()} />
-          </>
-        )}
-      </View>
+      <SectionTitle title="Your skips" subtitle="Undo a future skip to put that morning back on the delivery route." />
+      {!mySkips.length && <Text style={styles.empty}>You have not skipped any dates.</Text>}
+      {mySkips.map((row) => {
+        const day = String(row.date || '').slice(0, 10);
+        const future = day > today;
+        return (
+          <View key={row.id || day} style={styles.skipRow}>
+            <View style={styles.skipCopy}>
+              <Text style={styles.skipDate}>{/^\d{4}-\d{2}-\d{2}$/.test(day) ? niceDate(day) : day}</Text>
+              <Text style={styles.line}>{row.reason || 'No reason given'}</Text>
+              {!future && <Text style={styles.locked}>{s.UNDO_SKIP_MESSAGE}</Text>}
+            </View>
+            {future && (
+              <Pressable style={styles.undo} onPress={() => undo(row)} disabled={busy} accessibilityRole="button" accessibilityLabel={`Undo skip for ${day}`}>
+                <Text style={styles.undoText}>{busy ? '...' : 'Undo'}</Text>
+              </Pressable>
+            )}
+          </View>
+        );
+      })}
+
     </ResponsiveContainer>
   );
 }
@@ -159,4 +208,14 @@ const styles = StyleSheet.create({
   dayNum: { fontWeight: '900', color: colors.text },
   dayTag: { fontSize: 9, fontWeight: '800', color: colors.muted, marginTop: 2 },
   selected: { borderColor: colors.primary, borderWidth: 2 },
+  selectedLabel: { fontWeight: '900', color: colors.text, fontSize: 16 },
+  hint: { color: colors.primaryDark, marginTop: 6, marginBottom: 8, fontSize: 12, fontWeight: '700', lineHeight: 18 },
+  reasonInput: { maxHeight: 120 },
+  empty: { color: colors.muted, marginBottom: 8 },
+  skipRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.card, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
+  skipCopy: { flex: 1 },
+  skipDate: { fontWeight: '900', color: colors.text, fontSize: 15 },
+  locked: { color: colors.warning, marginTop: 6, fontSize: 12, fontWeight: '700', lineHeight: 18 },
+  undo: { backgroundColor: colors.infoBg, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  undoText: { color: colors.primaryDark, fontWeight: '900', fontSize: 13 },
 });

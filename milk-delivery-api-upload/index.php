@@ -265,6 +265,79 @@ function hideSkippedDelivery(PDO $pdo, string $rid): void {
     $pdo->prepare("DELETE FROM app_records WHERE resource='deliveries' AND record_id=?")->execute([$rid]);
   }
 }
+function litresFromQuantity(string $qty): float {
+  if (!preg_match('/([0-9]*[.,]?[0-9]+)\s*([a-z]*)/i', $qty, $m)) return 0.0;
+  $litres=(float)str_replace(',', '.', $m[1]);
+  if (str_starts_with(strtolower($m[2] ?? ''), 'm')) $litres/=1000;
+  return $litres;
+}
+function boyForRestoredStop(PDO $pdo, array $customer, string $date) {
+  $customerId=(string)($customer['id'] ?? '');
+  foreach ($pdo->query("SELECT payload FROM app_records WHERE resource='substitutions'") as $subRow) {
+    $sub=json_decode((string)$subRow['payload'], true);
+    if (!is_array($sub) || (string)($sub['date'] ?? '')!==$date) continue;
+    foreach (($sub['customerIds'] ?? []) as $cid) {
+      if (!sameId($cid, $customerId)) continue;
+      $subBoy=trim((string)($sub['substituteBoyId'] ?? ''));
+      return $subBoy==='' ? null : $subBoy;
+    }
+  }
+  $boy=$customer['defaultBoyId'] ?? null;
+  if ($boy===null || $boy==='') return null;
+  foreach ($pdo->query("SELECT payload FROM app_records WHERE resource='leave_requests'") as $lr) {
+    $leave=json_decode((string)$lr['payload'], true);
+    if (is_array($leave) && sameId($leave['boyId'] ?? null, $boy) && (string)($leave['date'] ?? '')===$date && (string)($leave['status'] ?? '')==='approved') return null;
+  }
+  return (string)$boy;
+}
+function restoreDeliveryStop(PDO $pdo, string $customerRecordId, string $date): void {
+  $q=$pdo->prepare("SELECT payload FROM app_records WHERE resource='customers' AND record_id=?");
+  $q->execute([$customerRecordId]);
+  $row=$q->fetch();
+  $customer=$row ? json_decode((string)$row['payload'], true) : null;
+  if (!is_array($customer)) return;
+  $customer['id']=$customerRecordId;
+  if (empty($customer['active'])) return;
+  $rid=$date.'_'.$customerRecordId;
+  $q=$pdo->prepare("SELECT payload FROM app_records WHERE resource='deliveries' AND record_id=?");
+  $q->execute([$rid]);
+  $existing=$q->fetch();
+  $old=$existing ? json_decode((string)$existing['payload'], true) : null;
+  if (is_array($old) && ($old['status'] ?? 'pending')!=='pending') return;
+  $litres=litresFromQuantity((string)($customer['milkQuantity'] ?? ''));
+  $rate=(float)($customer['ratePerLitre'] ?? 0);
+  $record=[
+    'id'=>$rid,
+    'date'=>$date,
+    'customerId'=>$customerRecordId,
+    'boyId'=>boyForRestoredStop($pdo, $customer, $date),
+    'areaId'=>$customer['areaId'] ?? null,
+    'status'=>'pending',
+    'expectedLitres'=>$litres,
+    'ratePerLitre'=>$rate,
+    'amount'=>$litres*$rate,
+  ];
+  $payload=json_encode(is_array($old) ? array_merge($old, $record) : $record, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES);
+  if ($existing) {
+    $pdo->prepare("UPDATE app_records SET payload=? WHERE resource='deliveries' AND record_id=?")->execute([$payload, $rid]);
+    return;
+  }
+  $pdo->prepare("INSERT INTO app_records(resource,record_id,payload) VALUES('deliveries',?,?)")->execute([$rid, $payload]);
+}
+function undoCustomerSkip(PDO $pdo, bool $isCustomer, string $customerRecordId, string $id): void {
+  if (!$isCustomer) out(403, ['error'=>'Only the customer who requested this skip can undo it']);
+  if ($customerRecordId==='') out(422, ['error'=>'This login is not linked to a customer record']);
+  $q=$pdo->prepare('SELECT id,customer_record_id,skip_date,reason,seen,created_at FROM skip_requests WHERE id=?');
+  $q->execute([$id]);
+  $row=$q->fetch();
+  if (!$row) out(404, ['error'=>'Skip request not found']);
+  if ((string)$row['customer_record_id']!==$customerRecordId) out(403, ['error'=>'You can only undo your own skip']);
+  $date=substr((string)$row['skip_date'], 0, 10);
+  if ($date<=date('Y-m-d')) out(422, ['error'=>'This delivery day has started, so this skip cannot be undone.']);
+  $pdo->prepare('DELETE FROM skip_requests WHERE id=? AND customer_record_id=?')->execute([$id, $customerRecordId]);
+  restoreDeliveryStop($pdo, $customerRecordId, $date);
+  out(200, ['ok'=>true, 'deletedId'=>$id, 'date'=>$date]);
+}
 function mapSkip(array $r): array {
   $date=(string)($r['skip_date'] ?? '');
   if (strlen($date)>10) $date=substr($date,0,10);
@@ -589,7 +662,10 @@ if ($resource==='skip_requests') {
     if ($isCustomer) out(200,['items'=>listSkips($pdo, $customerRecordId)]);
     out(403,['error'=>'Admin permission required']);
   }
-  if ($method==='POST' && $id) {
+  if (($method==='DELETE' || $method==='POST') && $id) {
+    $wantsUndo=$method==='DELETE' || !empty($input['undo']) || !empty(($input['item']['undo'] ?? null));
+    if ($wantsUndo) undoCustomerSkip($pdo, $isCustomer, $customerRecordId, (string)$id);
+    if ($method!=='POST') out(405,['error'=>'Method not allowed']);
     if (!$admin) out(403,['error'=>'Admin permission required']);
     $q=$pdo->prepare('UPDATE skip_requests SET seen=1 WHERE id=?');
     $q->execute([$id]);
@@ -607,7 +683,7 @@ if ($resource==='skip_requests') {
     $reason=trim((string)($patch['reason'] ?? ''));
     $parsed=DateTime::createFromFormat('Y-m-d', $date);
     if (!$parsed || $parsed->format('Y-m-d')!==$date) out(422,['error'=>'Choose a valid date']);
-    if ($date < date('Y-m-d')) out(422,['error'=>'Choose today or a future date']);
+    if ($date <= date('Y-m-d')) out(422,['error'=>'Choose a date at least one day ahead. Today and past dates cannot be skipped.']);
     if ($reason==='' || strlen($reason)>500) out(422,['error'=>'Enter a reason (500 characters or fewer)']);
     $skipId='skip_'.bin2hex(random_bytes(6));
     try {

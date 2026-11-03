@@ -1,11 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/theme';
 
-export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline, autoComplete, textContentType, importantForAutofill, onFocus, onBlur }) {
+export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline, autoComplete, textContentType, importantForAutofill, onFocus, onBlur, inputStyle }) {
+  const secret = !!secureTextEntry;
+  const [hidden, setHidden] = useState(true);
   return <View style={styles.wrap}>
     <Text style={styles.label}>{label}</Text>
-    <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secureTextEntry} multiline={multiline} autoComplete={autoComplete} textContentType={textContentType} importantForAutofill={importantForAutofill} onFocus={onFocus} onBlur={onBlur} autoCapitalize={keyboardType === 'email-address' || secureTextEntry ? 'none' : undefined} autoCorrect={secureTextEntry || keyboardType === 'email-address' ? false : undefined} style={[styles.input, multiline && styles.multi]} />
+    <View style={secret ? styles.secretRow : null}>
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secret && hidden} multiline={multiline} autoComplete={autoComplete} textContentType={textContentType} importantForAutofill={importantForAutofill} onFocus={onFocus} onBlur={onBlur} autoCapitalize={keyboardType === 'email-address' || secret ? 'none' : undefined} autoCorrect={secret || keyboardType === 'email-address' ? false : undefined} style={[styles.input, multiline && styles.multi, secret && styles.secretInput, inputStyle]} />
+      {secret ? (
+        <Pressable
+          onPress={() => setHidden((shown) => !shown)}
+          accessibilityRole="button"
+          accessibilityLabel={hidden ? 'Show password' : 'Hide password'}
+          hitSlop={8}
+          style={styles.eye}
+        >
+          <Ionicons name={hidden ? 'eye-outline' : 'eye-off-outline'} size={22} color={colors.muted} />
+        </Pressable>
+      ) : null}
+    </View>
   </View>;
 }
 
@@ -28,4 +44,4 @@ export function PrimaryButton({ title, onPress, disabled, secondary, danger }) {
 export function SectionTitle({ title, subtitle }) { return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text>{subtitle && <Text style={styles.sectionSub}>{subtitle}</Text>}</View>; }
 
 const styles = StyleSheet.create({
-  wrap: { marginBottom: 12 }, label: { fontSize: 13, fontWeight: '800', color: colors.text, marginBottom: 6 }, input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 13, paddingHorizontal: 14, paddingVertical: 13, color: colors.text, fontSize: 15 }, multi: { minHeight: 84, textAlignVertical: 'top' }, select: { minHeight: 48, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 13, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, selectText: { color: colors.text, fontSize: 15, flex: 1 }, placeholder: { color: '#9AA8B3' }, chevron: { color: colors.primary, fontSize: 22, marginLeft: 10 }, button: { minHeight: 50, borderRadius: 14, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, marginTop: 4, shadowColor: colors.shadow, shadowOpacity: .14, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, buttonText: { color: '#fff', fontWeight: '900', fontSize: 15 }, secondary: { backgroundColor: colors.infoBg, borderWidth: 1, borderColor: '#BBDDF4', shadowOpacity: 0, elevation: 0 }, secondaryText: { color: colors.primaryDark }, danger: { backgroundColor: colors.danger }, disabled: { opacity: .45 }, pressed: { opacity: .85 }, section: { marginTop: 8, marginBottom: 12 }, sectionTitle: { fontSize: 20, fontWeight: '900', color: colors.text }, sectionSub: { color: colors.muted, marginTop: 3, lineHeight: 18 } });
+  wrap: { marginBottom: 12 }, label: { fontSize: 13, fontWeight: '800', color: colors.text, marginBottom: 6 }, input: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 13, paddingHorizontal: 14, paddingVertical: 13, color: colors.text, fontSize: 15 }, multi: { minHeight: 84, textAlignVertical: 'top' }, secretRow: { justifyContent: 'center' }, secretInput: { paddingRight: 48 }, eye: { position: 'absolute', right: 6, top: 0, bottom: 0, width: 40, zIndex: 2, alignItems: 'center', justifyContent: 'center' }, select: { minHeight: 48, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, borderRadius: 13, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, selectText: { color: colors.text, fontSize: 15, flex: 1 }, placeholder: { color: '#9AA8B3' }, chevron: { color: colors.primary, fontSize: 22, marginLeft: 10 }, button: { minHeight: 50, borderRadius: 14, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, marginTop: 4, shadowColor: colors.shadow, shadowOpacity: .14, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 }, buttonText: { color: '#fff', fontWeight: '900', fontSize: 15 }, secondary: { backgroundColor: colors.infoBg, borderWidth: 1, borderColor: '#BBDDF4', shadowOpacity: 0, elevation: 0 }, secondaryText: { color: colors.primaryDark }, danger: { backgroundColor: colors.danger }, disabled: { opacity: .45 }, pressed: { opacity: .85 }, section: { marginTop: 8, marginBottom: 12 }, sectionTitle: { fontSize: 20, fontWeight: '900', color: colors.text }, sectionSub: { color: colors.muted, marginTop: 3, lineHeight: 18 } });

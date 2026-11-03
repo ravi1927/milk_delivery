@@ -6,6 +6,8 @@ import * as api from './apiClient';
 
 const K = { u: 'a2_users', a: 'a2_areas', c: 'a2_customers', d: 'a2_daily_deliveries', sub: 'a2_substitutions', lr: 'a2_leave_requests', s: 'a2_session', bills: 'a2_bills', skips: 'a2_skip_requests' };
 export const dateKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const SKIP_DATE_MESSAGE = 'Choose a date at least one day ahead. Today and past dates cannot be skipped.';
+export const UNDO_SKIP_MESSAGE = 'This delivery day has started, so this skip cannot be undone.';
 export const addDays = (date, amount) => { const d = new Date(`${date}T12:00:00`); d.setDate(d.getDate() + amount); return d; };
 export const money = n => `₹${Number(n || 0).toFixed(0)}`;
 export const litresFrom = value => parseLitres(value);
@@ -420,7 +422,7 @@ export async function requestSkip({ date, reason }) {
   const day = String(date || '');
   const why = String(reason || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error('Choose a date.');
-  if (day < dateKey()) throw new Error('Choose today or a future date.');
+  if (day <= dateKey()) throw new Error(SKIP_DATE_MESSAGE);
   if (!why) throw new Error('Enter a reason for the skip.');
   if (why.length > 500) throw new Error('Reason must be 500 characters or fewer.');
   if (api.apiEnabled()) return api.save('skip_requests', { date: day, reason: why });
@@ -433,6 +435,23 @@ export async function requestSkip({ date, reason }) {
   await setJson(K.skips, [...rows, record]);
   await ensureDailyRecords(day);
   return record;
+}
+
+export async function undoSkip(id) {
+  const key = String(id || '');
+  if (!key) throw new Error('Skip request not found.');
+  const rows = await getSkipRequests();
+  const row = rows.find((r) => same(r.id, key));
+  if (!row) throw new Error('Skip request not found.');
+  const day = String(row.date || '').slice(0, 10);
+  if (day <= dateKey()) throw new Error(UNDO_SKIP_MESSAGE);
+  if (api.apiEnabled()) return api.undoSkip(key);
+  const me = await session();
+  const mine = me?.customerRecordId;
+  if (!mine || !same(mine, row.customerRecordId)) throw new Error('You can only undo your own skip.');
+  await setJson(K.skips, rows.filter((r) => !same(r.id, key)));
+  await ensureDailyRecords(day);
+  return { ok: true, deletedId: key, date: day };
 }
 
 export async function acknowledgeSkip(id) {
