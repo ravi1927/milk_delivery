@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Header from '../../components/Header';
@@ -8,7 +8,7 @@ import SheetModal from '../../components/SheetModal';
 import LocationPicker from '../../components/LocationPicker';
 import { normalizePhone } from '../../services/billing';
 import { geocodeAddress, hasCoords, parsePoint } from '../../services/geo';
-import { CUSTOMER_DEFAULT_PASSWORD } from '../../services/customerLogin';
+import { requiredCustomerLogin, suggestCustomerLogin } from '../../services/customerLogin';
 import * as s from '../../services/store';
 import { colors } from '../../constants/theme';
 
@@ -22,7 +22,8 @@ export default function Customers() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [busy, setBusy] = useState(false);
-  const [issued, setIssued] = useState(null);
+  const emailEdited = useRef(false);
+  const passwordEdited = useRef(false);
   const cols = useResponsiveColumns(300);
 
   const load = async () => {
@@ -36,7 +37,13 @@ export default function Customers() {
   useFocusEffect(useCallback(() => { load(); }, []));
 
   const loginFor = (row) => users.find((u) => u.role === 'customer' && String(u.customerRecordId) === String(row?.id) && u.active !== false && u.active !== 0 && u.active !== '0');
+  const emailsExcept = (exceptEmail) => users
+    .map((u) => u.email)
+    .filter((email) => String(email || '').trim().toLowerCase() !== String(exceptEmail || '').trim().toLowerCase());
   const open = (row = null) => {
+    const existingEmail = row ? (loginFor(row)?.email || '') : '';
+    emailEdited.current = !!existingEmail;
+    passwordEdited.current = !!existingEmail;
     setEditing(row);
     setForm(row ? {
       name: row.name,
@@ -47,15 +54,28 @@ export default function Customers() {
       ratePerLitre: String(row.ratePerLitre || 60),
       latitude: row.latitude ?? null,
       longitude: row.longitude ?? null,
-      email: loginFor(row)?.email || '',
-      password: '',
+      email: existingEmail || suggestCustomerLogin(row.name, emailsExcept('')).email,
+      password: existingEmail ? '' : suggestCustomerLogin(row.name, emailsExcept('')).password,
     } : emptyForm(areas[0]?.id || ''));
     setModal(true);
+  };
+  const onName = (name) => {
+    setForm((current) => {
+      const next = { ...current, name };
+      const suggested = suggestCustomerLogin(name, emailsExcept(editing ? loginFor(editing)?.email : ''));
+      if (!emailEdited.current) next.email = suggested.email;
+      if (!passwordEdited.current) next.password = suggested.password;
+      return next;
+    });
   };
 
   const save = async () => {
     if (!form.name.trim() || !form.areaId || !form.ratePerLitre) return Alert.alert('Required', 'Name, area and rate per litre are required.');
     if (form.phone.trim() && !normalizePhone(form.phone)) return Alert.alert('Mobile number', 'Enter a valid 10-digit mobile number. It is used to send the WhatsApp bill.');
+    const existingLogin = editing ? loginFor(editing) : null;
+    if (!existingLogin && !requiredCustomerLogin(form.email, form.password)) return Alert.alert('Login required', 'The login email and password stay on this form. The password needs at least 6 characters.');
+    if (existingLogin && form.password && form.password.length < 6) return Alert.alert('Login password', 'Password must be at least 6 characters, or leave it blank to keep the current one.');
+    if (existingLogin && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(form.email || '').trim())) return Alert.alert('Login email', 'Enter a valid login email.');
     setBusy(true);
     try {
       let latitude = form.latitude;
@@ -71,10 +91,9 @@ export default function Customers() {
           return;
         }
       }
-      const saved = await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
+      await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
       setModal(false);
       await load();
-      if (saved?.issuedLogin?.email) setIssued(saved.issuedLogin);
     } catch (error) {
       Alert.alert('Could not save', error.message || 'Try again.');
     } finally { setBusy(false); }
@@ -118,7 +137,7 @@ export default function Customers() {
         ))}
       </View>
       <SheetModal visible={modal} title={editing ? 'Update Customer' : 'Add Customer'} onClose={() => setModal(false)}>
-        <Field label="Customer name" value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} placeholder="Enter customer name" />
+        <Field label="Customer name" value={form.name} onChangeText={onName} placeholder="Enter customer name" />
         <Field label="Mobile number" value={form.phone} onChangeText={(v) => setForm({ ...form, phone: v })} keyboardType="phone-pad" placeholder="10 digit mobile" />
         <Field label="Address" value={form.address} onChangeText={(v) => setForm({ ...form, address: v })} placeholder="House / street / landmark" multiline />
         <SelectField label="Area" valueLabel={areaName} onPress={() => Alert.alert('Select area', areas.map((a) => a.name).join('\n'), areas.map((a) => ({ text: a.name, onPress: () => setForm({ ...form, areaId: a.id }) })))} />
@@ -131,17 +150,11 @@ export default function Customers() {
         />
         <Field label="Daily milk quantity" value={form.milkQuantity} onChangeText={(v) => setForm({ ...form, milkQuantity: v })} placeholder="Example: 1 L / 500 ml" />
         <Field label="Rate per litre (₹)" value={form.ratePerLitre} onChangeText={(v) => setForm({ ...form, ratePerLitre: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder="60" />
-        <Text style={styles.loginNote}>{editing && loginFor(editing)?.email ? `Login stays ${loginFor(editing).email}. Saving does not change the password.` : `A login is created on save: the customer name at dhaara.com, password ${CUSTOMER_DEFAULT_PASSWORD}. If that email exists, a number is added (name2@dhaara.com). The login is shown once after save.`}</Text>
+        <Text style={styles.loginNote}>{editing && loginFor(editing) ? 'Login email and password are editable. Leave the password blank to keep the current one.' : 'Email and password fill in from the name. Change either one before you save. If that email is already used, a number is added (ravikumar2@dhaara.com).'}</Text>
+        <Field label="Login email" value={form.email} onChangeText={(v) => { emailEdited.current = true; setForm((current) => ({ ...current, email: v })); }} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} autoComplete="off" placeholder="ravikumar@dhaara.com" />
+        <Field label="Login password" value={form.password} onChangeText={(v) => { passwordEdited.current = true; setForm((current) => ({ ...current, password: v })); }} autoCapitalize="none" autoCorrect={false} autoComplete="off" placeholder={editing && loginFor(editing) ? 'Leave blank to keep the current password' : 'ravikumar@1234'} />
         <PrimaryButton title={busy ? 'Saving...' : editing ? 'Update Customer' : 'Save Customer'} onPress={save} disabled={busy} />
         <PrimaryButton title="Cancel" secondary onPress={() => setModal(false)} />
-      </SheetModal>
-      <SheetModal visible={!!issued} title="Customer login" onClose={() => setIssued(null)}>
-        <Text style={styles.loginNote}>Share this with the customer now. It is shown only this once. They can change the password after signing in.</Text>
-        <Text style={styles.loginLabel}>Email</Text>
-        <Text selectable style={styles.loginValue}>{issued?.email}</Text>
-        <Text style={styles.loginLabel}>Password</Text>
-        <Text selectable style={styles.loginValue}>{issued?.password}</Text>
-        <PrimaryButton title="Done" onPress={() => setIssued(null)} />
       </SheetModal>
     </ResponsiveContainer>
   );
@@ -164,6 +177,4 @@ const styles = StyleSheet.create({
   delete: { flex: 1, padding: 11, borderRadius: 10, backgroundColor: colors.dangerBg, alignItems: 'center' },
   deleteText: { fontWeight: '900', color: colors.danger },
   loginNote: { color: colors.muted, lineHeight: 20, marginBottom: 12 },
-  loginLabel: { fontSize: 12, fontWeight: '800', color: colors.muted, marginTop: 8 },
-  loginValue: { fontSize: 18, fontWeight: '900', color: colors.text, marginBottom: 8 },
 });

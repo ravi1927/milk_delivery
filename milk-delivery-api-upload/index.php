@@ -769,7 +769,8 @@ if ($resource==='users') {
     $name=trim((string)($input['name'] ?? $patch['name'] ?? '')); $email=strtolower(trim((string)($input['email'] ?? $patch['email'] ?? '')));
     $password=(string)($input['password'] ?? $patch['password'] ?? ''); $role=(string)($input['role'] ?? $patch['role'] ?? '');
     $linked=customerRecordFrom($input) ?: customerRecordFrom($patch);
-    if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || strlen($password)<8 || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email, password (8+ chars), and valid role are required']);
+    $minLength=$role==='customer'?6:8;
+    if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || strlen($password)<$minLength || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email, password ('.$minLength.'+ chars), and valid role are required']);
     if ($role==='customer') {
       if ($linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
       $q=$pdo->prepare("SELECT record_id FROM app_records WHERE resource='customers' AND record_id=?");
@@ -838,7 +839,8 @@ if ($resource==='users') {
     $q->execute([$email,(string)$existing['id']]);
     if ($q->fetch()) out(409,['error'=>'Email is already in use']);
     $password=(string)($patch['password'] ?? '');
-    if ($password!=='' && strlen($password)<8) out(422,['error'=>'Password must be at least 8 characters']);
+    $minLength=$role==='customer'?6:8;
+    if ($password!=='' && strlen($password)<$minLength) out(422,['error'=>'Password must be at least '.$minLength.' characters']);
     $stored=customerStorage($pdo,$role,$areaId,$linked);
     $rowId=$existing['id'];
     $hash=$password!=='' ? password_hash($password,PASSWORD_DEFAULT) : null;

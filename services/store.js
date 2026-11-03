@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseLitres, cycleDueKey } from './billing';
-import { generateCustomerLogin, requiredCustomerLogin } from './customerLogin';
+import { requiredCustomerLogin } from './customerLogin';
 import { parsePoint } from './geo';
 import * as api from './apiClient';
 
@@ -284,7 +284,7 @@ function withoutLogin(input) {
 
 function customerLoginOrThrow(email, password) {
   const login = requiredCustomerLogin(email, password);
-  if (!login) throw new Error('Enter a login email and a password of at least 8 characters. Both are required to save the customer.');
+  if (!login) throw new Error('Enter a login email and a password of at least 6 characters. Both are required to save the customer.');
   return login;
 }
 
@@ -329,36 +329,29 @@ function customerPayload(input, prev, id) {
   return clean;
 }
 
-function duplicateLoginError(err) {
-  return /already (used|exists|in use)|email or user id already exists/i.test(String(err?.message || ''));
-}
-
-// Creates the users-table login when this customer does not have one yet.
-// An existing login keeps its email and password. Returns the generated login once, or null when nothing new was issued.
-async function attachCustomerLogin(customer) {
+// Saves the email and password from the form onto the users table.
+// A blank password on an existing login leaves that password as it is.
+async function attachCustomerLogin(customer, input) {
+  const typedEmail = String(input?.email || '').trim();
+  const typedPassword = String(input?.password || '');
   const users = await getUsers();
   const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, customer.id));
-  if (existing) {
-    if (String(existing.name || '') !== String(customer.name || '')) {
-      const keptEmail = String(existing.email || '').trim().toLowerCase();
-      if (api.apiEnabled()) await api.updateUser(existing.id, { name: customer.name, email: keptEmail, role: 'customer', customerRecordId: customer.id, active: true });
-      else await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name } : u));
+  if (existing && typedPassword === '') {
+    const email = (typedEmail || String(existing.email || '')).trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid login email.');
+    const emailChanged = email !== String(existing.email || '').trim().toLowerCase();
+    const nameChanged = String(existing.name || '') !== String(customer.name || '');
+    if (emailChanged && users.some((u) => !same(u.id, existing.id) && String(u.email || '').toLowerCase() === email)) {
+      throw new Error('That email is already used by another login.');
     }
-    return null;
-  }
-  let emails = users.map((u) => u.email);
-  let login = generateCustomerLogin(customer.name, emails);
-  for (let attempt = 0; attempt < 25; attempt += 1) {
-    try {
-      await syncCustomerLogin(customer, login.email, login.password);
-      return { email: login.email, password: login.password };
-    } catch (err) {
-      if (!duplicateLoginError(err)) throw err;
-      emails = [...emails, login.email];
-      login = generateCustomerLogin(customer.name, emails);
+    if (emailChanged || nameChanged) {
+      if (api.apiEnabled()) await api.updateUser(existing.id, { name: customer.name, email, role: 'customer', customerRecordId: customer.id, active: true });
+      else await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name, email } : u));
     }
+    return;
   }
-  throw new Error('Could not create a unique login email.');
+  const login = customerLoginOrThrow(typedEmail, typedPassword);
+  await syncCustomerLogin(customer, login.email, login.password);
 }
 
 export async function saveCustomer(input, id) {
@@ -370,21 +363,21 @@ export async function saveCustomer(input, id) {
     const prev = id ? cs.find((c) => same(c.id, id)) || {} : {};
     const row = customerPayload(fields, prev, id || `c_${Date.now()}`);
     await api.save('customers', row);
-    const issuedLogin = await attachCustomerLogin(row);
+    await attachCustomerLogin(row, input);
     try { await ensureTodayRecords(); } catch (err) { console.warn('Today records', err); }
-    return { ...row, issuedLogin };
+    return row;
   }
   const cs = await getCustomers();
   const targetId = id || `c_${Date.now()}`;
   const row = { ...clean, id: targetId, createdOn: id ? (cs.find((c) => c.id === id)?.createdOn || dateKey()) : dateKey() };
   if (id) await setJson(K.c, cs.map((c) => c.id === id ? { ...c, ...clean } : c));
   else await setJson(K.c, [...cs, row]);
-  const issuedLogin = await attachCustomerLogin(row);
+  await attachCustomerLogin(row, input);
   try { await ensureTodayRecords(); } catch (err) { console.warn('Today records', err); }
   const ds = await getDeliveries();
   const today = dateKey();
   await setJson(K.d, ds.map((d) => d.date === today && d.customerId === targetId && d.status === 'pending' ? { ...d, expectedLitres: litresFrom(clean.milkQuantity), ratePerLitre: Number(clean.ratePerLitre || 0), amount: litresFrom(clean.milkQuantity) * Number(clean.ratePerLitre || 0), areaId: clean.areaId } : d));
-  return { ...row, issuedLogin };
+  return row;
 }
 
 export async function deleteCustomer(id) {

@@ -3,13 +3,13 @@ import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../constants/theme';
 
-export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline, autoComplete, textContentType, importantForAutofill, onFocus, onBlur, inputStyle }) {
+export function Field({ label, value, onChangeText, placeholder, keyboardType, secureTextEntry, multiline, autoComplete, textContentType, importantForAutofill, onFocus, onBlur, inputStyle, autoCapitalize, autoCorrect }) {
   const secret = !!secureTextEntry;
   const [hidden, setHidden] = useState(true);
   return <View style={styles.wrap}>
     <Text style={styles.label}>{label}</Text>
     <View style={secret ? styles.secretRow : null}>
-      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secret && hidden} multiline={multiline} autoComplete={autoComplete} textContentType={textContentType} importantForAutofill={importantForAutofill} onFocus={onFocus} onBlur={onBlur} autoCapitalize={keyboardType === 'email-address' || secret ? 'none' : undefined} autoCorrect={secret || keyboardType === 'email-address' ? false : undefined} style={[styles.input, multiline && styles.multi, secret && styles.secretInput, inputStyle]} />
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#9AA8B3" keyboardType={keyboardType} secureTextEntry={secret && hidden} multiline={multiline} autoComplete={autoComplete} textContentType={textContentType} importantForAutofill={importantForAutofill} onFocus={onFocus} onBlur={onBlur} autoCapitalize={autoCapitalize ?? (keyboardType === 'email-address' || secret ? 'none' : undefined)} autoCorrect={autoCorrect ?? (secret || keyboardType === 'email-address' ? false : undefined)} style={[styles.input, multiline && styles.multi, secret && styles.secretInput, inputStyle]} />
       {secret ? (
         <Pressable
           onPress={() => setHidden((shown) => !shown)}
