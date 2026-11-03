@@ -73,26 +73,99 @@ function columnExists(PDO $pdo, string $table, string $column): bool {
   $q->execute([$table,$column]);
   return (bool)$q->fetchColumn();
 }
-function usersHaveCustomerLink(PDO $pdo): bool { return columnExists($pdo,'users','customer_record_id'); }
+function usersHaveCustomerLink(PDO $pdo): bool {
+  try {
+    $col=$pdo->query("SHOW COLUMNS FROM users LIKE 'customer_record_id'")->fetch();
+    return is_array($col);
+  } catch (Throwable $e) { return false; }
+}
 function customerRoleReady(PDO $pdo): bool {
-  if (!usersHaveCustomerLink($pdo)) return false;
-  $q=$pdo->prepare("SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='role' LIMIT 1");
-  $q->execute();
-  $type=strtolower((string)$q->fetchColumn());
-  return str_contains($type, 'customer');
+  try {
+    if (!usersHaveCustomerLink($pdo)) return false;
+    $col=$pdo->query("SHOW COLUMNS FROM users LIKE 'role'")->fetch();
+    return str_contains(strtolower((string)($col['Type'] ?? '')), 'customer');
+  } catch (Throwable $e) { return false; }
 }
-function roleValueRejected(Throwable $e): bool {
-  $msg=strtolower($e->getMessage());
-  $mentionsRole=str_contains($msg, 'role');
-  return $mentionsRole && (str_contains($msg, 'truncated') || str_contains($msg, 'invalid') || str_contains($msg, 'enum'));
+function isDuplicateKey(Throwable $e): bool {
+  return str_contains(strtolower($e->getMessage()),'duplicate') || (string)$e->getCode()==='23000';
 }
-function publicUser(array $u): array {
+function customerIdsByLoginUser(PDO $pdo, bool $reset=false): array {
+  static $map=null;
+  if ($reset) { $map=null; return []; }
+  if ($map!==null) return $map;
+  $map=[];
+  try {
+    foreach ($pdo->query("SELECT record_id, payload FROM app_records WHERE resource='customers'") as $row) {
+      $payload=json_decode((string)$row['payload'], true);
+      $uid=is_array($payload) ? trim((string)($payload['loginUserId'] ?? '')) : '';
+      if ($uid!=='') $map[$uid]=(string)$row['record_id'];
+    }
+  } catch (Throwable $e) {}
+  return $map;
+}
+function rememberCustomerLogin(PDO $pdo, string $userId, string $customerRecordId): void {
+  if ($userId==='' || $customerRecordId==='') return;
+  $q=$pdo->prepare("SELECT payload FROM app_records WHERE resource='customers' AND record_id=?");
+  $q->execute([$customerRecordId]);
+  $row=$q->fetch();
+  if (!$row) return;
+  $payload=json_decode((string)$row['payload'], true);
+  if (!is_array($payload)) $payload=['id'=>$customerRecordId];
+  $payload['id']=$customerRecordId;
+  $payload['loginUserId']=$userId;
+  unset($payload['password'], $payload['password_hash'], $payload['email']);
+  $pdo->prepare('UPDATE app_records SET payload=? WHERE resource=\'customers\' AND record_id=?')
+    ->execute([json_encode($payload, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES), $customerRecordId]);
+  customerIdsByLoginUser($pdo, true);
+}
+function ensureCustomerLoginSchema(PDO $pdo): void {
+  static $done=false;
+  if ($done) return;
+  $done=true;
+  try {
+    $col=$pdo->query("SHOW COLUMNS FROM users LIKE 'role'")->fetch();
+    $type=strtolower((string)($col['Type'] ?? ''));
+    if ($type!=='' && !str_contains($type, 'customer')) {
+      $pdo->exec("ALTER TABLE users MODIFY COLUMN role ENUM('admin','delivery','customer') NOT NULL");
+    }
+    if (!usersHaveCustomerLink($pdo)) {
+      $pdo->exec('ALTER TABLE users ADD COLUMN customer_record_id VARCHAR(100) NULL');
+      try { $pdo->exec('ALTER TABLE users ADD UNIQUE KEY uq_users_customer_record (customer_record_id)'); } catch (Throwable $e) {}
+    }
+  } catch (Throwable $e) { /* The DB user may not have ALTER. Customer login still uses the current columns. */ }
+  try {
+    if (!tableExists($pdo,'login')) {
+      $pdo->exec("CREATE TABLE IF NOT EXISTS login (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        user_id VARCHAR(64) NULL,
+        role ENUM('admin','delivery','customer') NULL,
+        password_hash VARCHAR(255) NULL,
+        success TINYINT(1) NOT NULL DEFAULT 0,
+        event ENUM('signin','password') NOT NULL DEFAULT 'signin',
+        signed_in_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_login_user (user_id),
+        INDEX idx_login_signed (signed_in_at)
+      ) ENGINE=InnoDB");
+    }
+  } catch (Throwable $e) {}
+}
+function publicUser(PDO $pdo, array $u): array {
   unset($u['password_hash']);
   $u['areaId']=$u['area_id'] ?? ($u['areaId'] ?? null);
   unset($u['area_id']);
   $u['customerRecordId']=$u['customer_record_id'] ?? ($u['customerRecordId'] ?? null);
   unset($u['customer_record_id']);
   if ($u['customerRecordId']==='') $u['customerRecordId']=null;
+  $area=(string)($u['areaId'] ?? '');
+  if (($u['customerRecordId']===null || $u['customerRecordId']==='') && str_starts_with($area, 'customer:')) {
+    $u['customerRecordId']=substr($area, 9);
+  }
+  if ($u['customerRecordId']===null || $u['customerRecordId']==='') {
+    $mapped=customerIdsByLoginUser($pdo)[(string)($u['id'] ?? '')] ?? '';
+    if ($mapped!=='') $u['customerRecordId']=$mapped;
+  }
+  if (!empty($u['customerRecordId']) && ($u['role'] ?? '')!=='admin') $u['role']='customer';
+  if (str_starts_with($area, 'customer:')) $u['areaId']=null;
   if (isset($u['active'])) $u['active']=(int)$u['active'];
   return $u;
 }
@@ -111,12 +184,61 @@ function recordLogin(PDO $pdo, ?string $userId, ?string $role, ?string $password
 }
 function mirrorLoginPassword(PDO $pdo, string $userId, string $role, string $hash): void {
   if (!tableExists($pdo,'login')) return;
-  $pdo->prepare('UPDATE login SET password_hash=?, role=? WHERE user_id=?')->execute([$hash,$role,$userId]);
-  $q=$pdo->prepare('SELECT id FROM login WHERE user_id=? LIMIT 1');
-  $q->execute([$userId]);
-  if (!$q->fetch()) {
-    $pdo->prepare('INSERT INTO login(user_id,role,password_hash,success,event,signed_in_at) VALUES(?,?,?,0,\'password\',NOW())')->execute([$userId,$role,$hash]);
+  try {
+    $pdo->prepare('UPDATE login SET password_hash=?, role=? WHERE user_id=?')->execute([$hash,$role,$userId]);
+    $q=$pdo->prepare('SELECT id FROM login WHERE user_id=? LIMIT 1');
+    $q->execute([$userId]);
+    if (!$q->fetch()) {
+      $pdo->prepare('INSERT INTO login(user_id,role,password_hash,success,event,signed_in_at) VALUES(?,?,?,0,\'password\',NOW())')->execute([$userId,$role,$hash]);
+    }
+  } catch (Throwable $e) { /* users.password_hash already saved; a missing login table must not undo it */ }
+}
+function insertUser(PDO $pdo, string $id, string $name, string $email, string $hash, string $role, ?string $areaId, ?string $customerRecordId): string {
+  $hasLink=usersHaveCustomerLink($pdo);
+  $run=function (?string $useId) use ($pdo,$name,$email,$hash,$role,$areaId,$customerRecordId,$hasLink): string {
+    $pdo->beginTransaction();
+    try {
+      if ($useId!==null && $useId!=='') {
+        if ($hasLink) {
+          $pdo->prepare('INSERT INTO users(id,name,email,password_hash,role,area_id,customer_record_id) VALUES(?,?,?,?,?,?,?)')->execute([$useId,$name,$email,$hash,$role,$areaId,$customerRecordId]);
+        } else {
+          $pdo->prepare('INSERT INTO users(id,name,email,password_hash,role,area_id) VALUES(?,?,?,?,?,?)')->execute([$useId,$name,$email,$hash,$role,$areaId]);
+        }
+        $newId=$useId;
+      } else {
+        if ($hasLink) {
+          $pdo->prepare('INSERT INTO users(name,email,password_hash,role,area_id,customer_record_id) VALUES(?,?,?,?,?,?)')->execute([$name,$email,$hash,$role,$areaId,$customerRecordId]);
+        } else {
+          $pdo->prepare('INSERT INTO users(name,email,password_hash,role,area_id) VALUES(?,?,?,?,?)')->execute([$name,$email,$hash,$role,$areaId]);
+        }
+        $newId=(string)$pdo->lastInsertId();
+      }
+      $pdo->commit();
+      return $newId;
+    } catch (Throwable $e) {
+      if ($pdo->inTransaction()) $pdo->rollBack();
+      throw $e;
+    }
+  };
+  try { return $run($id); }
+  catch (Throwable $e) {
+    if (isDuplicateKey($e)) throw $e;
+    return $run(null);
   }
+}
+function customerStorage(PDO $pdo, string $role, ?string $areaId, ?string $linked): array {
+  if ($role!=='customer') return ['role'=>$role,'area'=>$areaId,'link'=>null];
+  ensureCustomerLoginSchema($pdo);
+  $enumOk=false;
+  try {
+    $col=$pdo->query("SHOW COLUMNS FROM users LIKE 'role'")->fetch();
+    $enumOk=str_contains(strtolower((string)($col['Type'] ?? '')), 'customer');
+  } catch (Throwable $e) {}
+  $marker='customer:'.(string)$linked;
+  $markerArea=strlen($marker)<=64 ? $marker : null;
+  if ($enumOk && usersHaveCustomerLink($pdo)) return ['role'=>'customer','area'=>null,'link'=>$linked];
+  if ($enumOk) return ['role'=>'customer','area'=>$markerArea,'link'=>null];
+  return ['role'=>'delivery','area'=>$markerArea,'link'=>null];
 }
 function customerRecordFrom(array $input): string {
   foreach (['customerRecordId','customer_record_id','customerId'] as $key) {
@@ -333,13 +455,18 @@ if ($path === '/auth/login' && $method === 'POST') {
     $q=$pdo->prepare('SELECT '.userAuthSelect($pdo).' FROM users WHERE LOWER(email)=? LIMIT 1');
     $q->execute([$email]); $u=$q->fetch();
     $ok=is_array($u) && (int)$u['active'] && !empty($u['password_hash']) && password_verify($password,(string)$u['password_hash']);
-    try { recordLogin($pdo, is_array($u) ? (string)$u['id'] : null, is_array($u) ? (string)$u['role'] : null, is_array($u) ? (string)($u['password_hash'] ?? '') : null, $ok); }
+    if (!$ok) {
+      try { recordLogin($pdo, is_array($u) ? (string)$u['id'] : null, is_array($u) ? (string)$u['role'] : null, is_array($u) ? (string)($u['password_hash'] ?? '') : null, false); }
+      catch (Throwable $e) { /* sign-in history must not block the error */ }
+      out(401,['error'=>'Invalid email or password']);
+    }
+    $public=publicUser($pdo,$u);
+    try { recordLogin($pdo, (string)$u['id'], (string)$public['role'], (string)($u['password_hash'] ?? ''), true); }
     catch (Throwable $e) { /* sign-in history must not block a valid login */ }
-    if (!$ok) out(401,['error'=>'Invalid email or password']);
     $token=bin2hex(random_bytes(32)); $hash=hash('sha256',$token);
     $q=$pdo->prepare('INSERT INTO api_sessions(token_hash,user_id,expires_at) VALUES(?,?,DATE_ADD(NOW(), INTERVAL 7 DAY))');
     $q->execute([$hash,$u['id']]);
-    $public=publicUser($u); $public['token']=$token;
+    $public['token']=$token;
     out(200,['user'=>$public,'token'=>$token]);
   } catch (Throwable $e) {
     out(500, ['ok'=>false, 'error'=>'Login failed. Usually the api_sessions table is missing or users columns do not match.', 'detail'=>$e->getMessage()]);
@@ -357,7 +484,7 @@ $linkCol=usersHaveCustomerLink($pdo) ? 'u.customer_record_id' : 'NULL AS custome
 $q=$pdo->prepare("SELECT u.id,u.name,u.email,u.role,u.area_id,{$linkCol},u.active FROM api_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>NOW() LIMIT 1");
 $q->execute([hash('sha256',$token)]); $user=$q->fetch();
 if (!$user || !(int)$user['active']) out(401,['error'=>'Session expired. Please sign in again.']);
-$user=publicUser($user);
+$user=publicUser($pdo,$user);
 $admin=$user['role']==='admin';
 $isCustomer=$user['role']==='customer';
 $customerRecordId=(string)($user['customerRecordId'] ?? '');
@@ -505,7 +632,8 @@ if ($resource==='users') {
   if (!$admin) out(403,['error'=>'Admin permission required']);
   if ($method==='GET') {
     $rows=$pdo->query('SELECT '.userPublicSelect($pdo).' FROM users ORDER BY name')->fetchAll();
-    out(200,['items'=>$rows]);
+    $items=array_map(fn($row)=>publicUser($pdo,$row), $rows);
+    out(200,['items'=>$items]);
   }
   $patch=$input['item'] ?? $input;
   if (!is_array($patch)) $patch=$input;
@@ -522,7 +650,6 @@ if ($resource==='users') {
     if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || strlen($password)<8 || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email, password (8+ chars), and valid role are required']);
     if ($role==='customer') {
       if ($linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
-      if (!customerRoleReady($pdo)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
       $q=$pdo->prepare("SELECT record_id FROM app_records WHERE resource='customers' AND record_id=?");
       $q->execute([$linked]);
       if (!$q->fetch()) out(422,['error'=>'No app customer record with that id']);
@@ -530,40 +657,36 @@ if ($resource==='users') {
     $hash=password_hash($password,PASSWORD_DEFAULT);
     $areaRaw=$input['areaId'] ?? $input['area_id'] ?? $patch['areaId'] ?? $patch['area_id'] ?? null;
     $areaId=($areaRaw===null || $areaRaw==='' || $areaRaw===false) ? null : (string)$areaRaw;
-    try {
-      $pdo->beginTransaction();
-      if (usersHaveCustomerLink($pdo)) {
-        $q=$pdo->prepare('INSERT INTO users(id,name,email,password_hash,role,area_id,customer_record_id) VALUES(?,?,?,?,?,?,?)');
-        $q->execute([$id,$name,$email,$hash,$role,$areaId,$linked]);
-      } else {
-        $q=$pdo->prepare('INSERT INTO users(id,name,email,password_hash,role,area_id) VALUES(?,?,?,?,?,?)');
-        $q->execute([$id,$name,$email,$hash,$role,$areaId]);
-      }
-      mirrorLoginPassword($pdo,(string)$id,$role,$hash);
-      $pdo->commit();
-    } catch (Throwable $e) {
-      if ($pdo->inTransaction()) $pdo->rollBack();
-      $dup=str_contains(strtolower($e->getMessage()),'duplicate') || (string)$e->getCode()==='23000';
-      if ($dup) out(409,['error'=>'Email or user ID already exists']);
-      if (roleValueRejected($e)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
-      if (!usersHaveCustomerLink($pdo) && $role!=='customer') {
-        try {
-          $pdo->beginTransaction();
-          $q=$pdo->prepare('INSERT INTO users(name,email,password_hash,role,area_id) VALUES(?,?,?,?,?)');
-          $q->execute([$name,$email,$hash,$role,$areaId]);
-          $id=(string)$pdo->lastInsertId();
-          mirrorLoginPassword($pdo,$id,$role,$hash);
-          $pdo->commit();
-        } catch (Throwable $e2) {
-          if ($pdo->inTransaction()) $pdo->rollBack();
-          $dup2=str_contains(strtolower($e2->getMessage()),'duplicate') || (string)$e2->getCode()==='23000';
-          out($dup2?409:500,['error'=>$dup2?'Email or user ID already exists':'Could not create the user','detail'=>$e2->getMessage()]);
-        }
-      } else {
-        out(500,['error'=>'Could not create the user','detail'=>$e->getMessage()]);
+    $plans=[$role==='customer' ? customerStorage($pdo,$role,$areaId,$linked) : ['role'=>$role,'area'=>$areaId,'link'=>null]];
+    if ($role==='customer' && $plans[0]['role']!=='delivery') {
+      $marker='customer:'.$linked;
+      $plans[]=['role'=>'delivery','area'=>strlen($marker)<=64 ? $marker : null,'link'=>null];
+    }
+    if ($role==='customer' && ($plans[count($plans)-1]['area'] ?? null)!==null) $plans[]=['role'=>'delivery','area'=>null,'link'=>null];
+    $createdId='';
+    $used=null;
+    $lastError='Could not create the user';
+    foreach ($plans as $plan) {
+      try {
+        $createdId=insertUser($pdo,$id,$name,$email,$hash,(string)$plan['role'],$plan['area'],$plan['link']);
+        $used=$plan;
+        break;
+      } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if (isDuplicateKey($e)) out(409,['error'=>'Email or user ID already exists']);
+        $lastError=$e->getMessage();
       }
     }
-    out(201,['id'=>$id,'name'=>$name,'email'=>$email,'role'=>$role,'areaId'=>$areaId,'customerRecordId'=>$linked,'active'=>1]);
+    if ($used===null) out(500,['error'=>'Could not create the user','detail'=>$lastError]);
+    if ($role==='customer') {
+      try { rememberCustomerLogin($pdo,$createdId,$linked); }
+      catch (Throwable $e) {
+        $kept=($used['link'] ?? null) || (is_string($used['area'] ?? null) && str_starts_with((string)$used['area'],'customer:'));
+        if (!$kept) out(500,['error'=>'Could not create the user','detail'=>$e->getMessage()]);
+      }
+    }
+    mirrorLoginPassword($pdo,$createdId,$role,$hash);
+    out(201,['id'=>$createdId,'name'=>$name,'email'=>$email,'role'=>$role,'areaId'=>$role==='customer'?null:$areaId,'customerRecordId'=>$role==='customer'?$linked:null,'active'=>1]);
   }
   if ($wantUpdate && $id) {
     $select=usersHaveCustomerLink($pdo)
@@ -577,53 +700,54 @@ if ($resource==='users') {
       $q->execute([(string)$id]); $existing=$q->fetch();
     }
     if (!$existing) out(404,['error'=>'User not found']);
+    $visible=publicUser($pdo,$existing);
     $name=trim((string)($patch['name'] ?? $existing['name']));
     $email=strtolower(trim((string)($patch['email'] ?? $existing['email'])));
-    $role=(string)($patch['role'] ?? $existing['role']);
-    $areaRaw=array_key_exists('areaId',$patch) ? $patch['areaId'] : (array_key_exists('area_id',$patch) ? $patch['area_id'] : $existing['areaId']);
+    $role=(string)($patch['role'] ?? $visible['role']);
+    $areaRaw=array_key_exists('areaId',$patch) ? $patch['areaId'] : (array_key_exists('area_id',$patch) ? $patch['area_id'] : $visible['areaId']);
     $areaId=($areaRaw===null || $areaRaw==='' || $areaRaw===false) ? null : (string)$areaRaw;
     $active=array_key_exists('active',$patch) ? (int)!empty($patch['active']) : (int)$existing['active'];
     $linked=array_key_exists('customerRecordId',$patch) || array_key_exists('customerId',$patch) || array_key_exists('customer_record_id',$patch)
-      ? customerRecordFrom($patch) : (string)($existing['customerRecordId'] ?? '');
+      ? customerRecordFrom($patch) : (string)($visible['customerRecordId'] ?? '');
     if (!$name || !filter_var($email,FILTER_VALIDATE_EMAIL) || !in_array($role,$roles,true)) out(422,['error'=>'Name, valid email and role are required']);
-    if ($role==='customer') {
-      if ($linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
-      if (!customerRoleReady($pdo)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
-    } else $linked=null;
+    if ($role==='customer' && $linked==='') out(422,['error'=>'A customer login must include the app customer record id']);
+    if ($role!=='customer') $linked=null;
     $q=$pdo->prepare('SELECT id FROM users WHERE LOWER(email)=? AND CAST(id AS CHAR)<>? LIMIT 1');
     $q->execute([$email,(string)$existing['id']]);
     if ($q->fetch()) out(409,['error'=>'Email is already in use']);
     $password=(string)($patch['password'] ?? '');
+    if ($password!=='' && strlen($password)<8) out(422,['error'=>'Password must be at least 8 characters']);
+    $stored=customerStorage($pdo,$role,$areaId,$linked);
     $rowId=$existing['id'];
+    $hash=$password!=='' ? password_hash($password,PASSWORD_DEFAULT) : null;
     try {
       $pdo->beginTransaction();
-      if ($password!=='') {
-        if (strlen($password)<8) out(422,['error'=>'Password must be at least 8 characters']);
-        $hash=password_hash($password,PASSWORD_DEFAULT);
+      if ($hash!==null) {
         if (usersHaveCustomerLink($pdo)) {
           $q=$pdo->prepare('UPDATE users SET name=?,email=?,role=?,area_id=?,active=?,customer_record_id=?,password_hash=? WHERE id=?');
-          $q->execute([$name,$email,$role,$areaId,$active,$linked,$hash,$rowId]);
+          $q->execute([$name,$email,$stored['role'],$stored['area'],$active,$stored['link'],$hash,$rowId]);
         } else {
           $q=$pdo->prepare('UPDATE users SET name=?,email=?,role=?,area_id=?,active=?,password_hash=? WHERE id=?');
-          $q->execute([$name,$email,$role,$areaId,$active,$hash,$rowId]);
+          $q->execute([$name,$email,$stored['role'],$stored['area'],$active,$hash,$rowId]);
         }
-        mirrorLoginPassword($pdo,(string)$rowId,$role,$hash);
       } elseif (usersHaveCustomerLink($pdo)) {
         $q=$pdo->prepare('UPDATE users SET name=?,email=?,role=?,area_id=?,active=?,customer_record_id=? WHERE id=?');
-        $q->execute([$name,$email,$role,$areaId,$active,$linked,$rowId]);
+        $q->execute([$name,$email,$stored['role'],$stored['area'],$active,$stored['link'],$rowId]);
       } else {
         $q=$pdo->prepare('UPDATE users SET name=?,email=?,role=?,area_id=?,active=? WHERE id=?');
-        $q->execute([$name,$email,$role,$areaId,$active,$rowId]);
+        $q->execute([$name,$email,$stored['role'],$stored['area'],$active,$rowId]);
       }
       $pdo->commit();
     } catch (Throwable $e) {
       if ($pdo->inTransaction()) $pdo->rollBack();
-      $dup=str_contains(strtolower($e->getMessage()),'duplicate') || (string)$e->getCode()==='23000';
-      if ($dup) out(409,['error'=>'Email is already in use']);
-      if (roleValueRejected($e)) out(422,['error'=>'Customer logins are not available on this server yet','code'=>'customer_role_unavailable']);
+      if (isDuplicateKey($e)) out(409,['error'=>'Email is already in use']);
       out(500,['error'=>'Could not update the user','detail'=>$e->getMessage()]);
     }
-    out(200,['item'=>['id'=>$rowId,'name'=>$name,'email'=>$email,'role'=>$role,'areaId'=>$areaId,'customerRecordId'=>$linked,'active'=>$active]]);
+    if ($role==='customer') {
+      try { rememberCustomerLogin($pdo,(string)$rowId,$linked); } catch (Throwable $e) {}
+    }
+    if ($hash!==null) mirrorLoginPassword($pdo,(string)$rowId,$role,$hash);
+    out(200,['item'=>['id'=>$rowId,'name'=>$name,'email'=>$email,'role'=>$role,'areaId'=>$role==='customer'?null:$areaId,'customerRecordId'=>$role==='customer'?$linked:null,'active'=>$active]]);
   }
   out(405,['error'=>'Method not allowed']);
 }

@@ -33,7 +33,7 @@ MILK DELIVERY API — UPLOAD STEPS
 
    If /health shows database error, .env names/password are wrong.
 
-8. If this database already exists, apply migrations/2026-11-02-customer-login-photos-skips.sql in phpMyAdmin before using customer login, photo cleanup, or skip requests. It only adds columns and tables. Do not run any DELETE or DROP.
+8. Upload this index.php before adding a customer. Customer login works on the current users table (role admin/delivery and no customer_record_id) and does not delete any rows. Apply migrations/2026-11-02-customer-login-photos-skips.sql when you can; photo cleanup and skip requests still need it. That file only adds columns and tables. Do not run any DELETE or DROP.
 
 9. Login test (PowerShell). Use the admin email and password you created in MySQL:
 

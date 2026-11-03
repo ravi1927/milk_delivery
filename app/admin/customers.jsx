@@ -8,6 +8,7 @@ import SheetModal from '../../components/SheetModal';
 import LocationPicker from '../../components/LocationPicker';
 import { normalizePhone } from '../../services/billing';
 import { geocodeAddress, hasCoords, parsePoint } from '../../services/geo';
+import { requiredCustomerLogin } from '../../services/customerLogin';
 import * as s from '../../services/store';
 import { colors } from '../../constants/theme';
 
@@ -53,6 +54,7 @@ export default function Customers() {
 
   const save = async () => {
     if (!form.name.trim() || !form.areaId || !form.ratePerLitre) return Alert.alert('Required', 'Name, area and rate per litre are required.');
+    if (!requiredCustomerLogin(form.email, form.password)) return Alert.alert('Login required', 'Enter a login email and a password of at least 8 characters. Both are required before this customer can be saved.');
     if (form.phone.trim() && !normalizePhone(form.phone)) return Alert.alert('Mobile number', 'Enter a valid 10-digit mobile number. It is used to send the WhatsApp bill.');
     setBusy(true);
     try {
@@ -69,10 +71,9 @@ export default function Customers() {
           return;
         }
       }
-      const saved = await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
+      await s.saveCustomer({ ...form, name: form.name.trim(), address: String(form.address || '').trim(), latitude, longitude }, editing?.id);
       setModal(false);
       await load();
-      if (saved?.loginWarning) Alert.alert('Customer saved', saved.loginWarning);
     } catch (error) {
       Alert.alert('Could not save', error.message || 'Try again.');
     } finally { setBusy(false); }
@@ -129,8 +130,8 @@ export default function Customers() {
         />
         <Field label="Daily milk quantity" value={form.milkQuantity} onChangeText={(v) => setForm({ ...form, milkQuantity: v })} placeholder="Example: 1 L / 500 ml" />
         <Field label="Rate per litre (₹)" value={form.ratePerLitre} onChangeText={(v) => setForm({ ...form, ratePerLitre: v.replace(/[^0-9.]/g, '') })} keyboardType="decimal-pad" placeholder="60" />
-        <Field label="Login email (optional)" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoComplete="off" textContentType="none" importantForAutofill="no" placeholder="Leave blank to save without a login" />
-        <Field label="Login password (optional)" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry autoComplete="off" textContentType="none" importantForAutofill="no" placeholder="Leave blank to save without a login" />
+        <Field label="Login email" value={form.email} onChangeText={(v) => setForm({ ...form, email: v })} keyboardType="email-address" autoComplete="email" textContentType="emailAddress" placeholder="Required" />
+        <Field label="Login password" value={form.password} onChangeText={(v) => setForm({ ...form, password: v })} secureTextEntry autoComplete="new-password" textContentType="newPassword" placeholder="Required, at least 8 characters" />
         <PrimaryButton title={busy ? 'Saving...' : editing ? 'Update Customer' : 'Save Customer'} onPress={save} disabled={busy} />
         <PrimaryButton title="Cancel" secondary onPress={() => setModal(false)} />
       </SheetModal>
