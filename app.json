@@ -11,6 +11,7 @@
     },
     "android": {
       "package": "com.demo.milkdelivery",
+      "softwareKeyboardLayoutMode": "resize",
       "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

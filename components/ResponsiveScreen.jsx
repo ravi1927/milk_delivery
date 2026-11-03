@@ -1,5 +1,5 @@
 import React from 'react';
-import { Platform, ScrollView, StatusBar, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StatusBar, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Header from './Header';
 import { colors } from '../constants/theme';
@@ -18,40 +18,52 @@ export function useTopInset() {
  * Screen wrapper. The <Header/> child is pulled out and pinned at the top (below the
  * status bar / notch); everything else scrolls underneath it.
  */
-export function ResponsiveContainer({ children, scroll = true, contentStyle }) {
+export function ResponsiveContainer({ children, scroll = true, contentStyle, scrollRef, avoidKeyboard = false }) {
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const top = useTopInset();
+  const [headerHeight, setHeaderHeight] = React.useState(0);
   const sidePad = 12;
   const maxWidth = Math.min(MAX_WIDTH, Math.max(0, width - sidePad * 2 - insets.left - insets.right));
 
   const kids = React.Children.toArray(children);
   const headerEl = kids.find((k) => React.isValidElement(k) && k.type === Header);
   const body = kids.filter((k) => k !== headerEl);
+  const scroller = scroll ? (
+    <ScrollView
+      ref={scrollRef}
+      style={styles.flex}
+      contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + (avoidKeyboard ? 120 : 40), paddingHorizontal: sidePad }]}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      automaticallyAdjustKeyboardInsets={avoidKeyboard}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={[styles.inner, { width: maxWidth }, contentStyle]}>{body}</View>
+    </ScrollView>
+  ) : (
+    <View style={[styles.flex, styles.noScroll, { paddingBottom: insets.bottom }]}>
+      <View style={[styles.inner, { width: maxWidth }, contentStyle]}>{body}</View>
+    </View>
+  );
 
   return (
     <View style={[styles.root, { paddingTop: top, paddingLeft: insets.left, paddingRight: insets.right }]}>
       <StatusBar barStyle="dark-content" />
       {headerEl && (
-        <View style={styles.headerBar}>
+        <View style={styles.headerBar} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
           <View style={{ width: maxWidth }}>{headerEl}</View>
         </View>
       )}
-      {scroll ? (
-        <ScrollView
+      {avoidKeyboard ? (
+        <KeyboardAvoidingView
           style={styles.flex}
-          contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40, paddingHorizontal: sidePad }]}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          showsVerticalScrollIndicator={false}
+          behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined}
+          keyboardVerticalOffset={top + headerHeight}
         >
-          <View style={[styles.inner, { width: maxWidth }, contentStyle]}>{body}</View>
-        </ScrollView>
-      ) : (
-        <View style={[styles.flex, styles.noScroll, { paddingBottom: insets.bottom }]}>
-          <View style={[styles.inner, { width: maxWidth }, contentStyle]}>{body}</View>
-        </View>
-      )}
+          {scroller}
+        </KeyboardAvoidingView>
+      ) : scroller}
     </View>
   );
 }

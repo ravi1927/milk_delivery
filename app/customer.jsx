@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Keyboard, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import Header from '../components/Header';
 import { Field, PrimaryButton, SectionTitle } from '../components/Field';
@@ -37,6 +37,22 @@ export default function CustomerProfile() {
   const [selected, setSelected] = useState(today);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const scrollRef = useRef(null);
+  const reasonFocused = useRef(false);
+
+  const scrollReasonIntoView = useCallback(() => {
+    const run = () => scrollRef.current?.scrollToEnd({ animated: true });
+    setTimeout(run, Platform.OS === 'ios' ? 60 : 120);
+    setTimeout(run, 280);
+  }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const sub = Keyboard.addListener(showEvent, () => {
+      if (reasonFocused.current) scrollReasonIntoView();
+    });
+    return () => sub.remove();
+  }, [scrollReasonIntoView]);
 
   const load = async () => {
     try {
@@ -76,7 +92,7 @@ export default function CustomerProfile() {
   const cells = cellsFor(cursor.year, cursor.month);
 
   return (
-    <ResponsiveContainer>
+    <ResponsiveContainer scrollRef={scrollRef} avoidKeyboard>
       <Header title="My profile" subtitle="Read only" />
       <View style={styles.card}>
         <Text style={styles.name}>{customer?.name || user?.name || 'Customer'}</Text>
@@ -115,7 +131,7 @@ export default function CustomerProfile() {
           <Text style={styles.line}>Already skipped. Reason: {selectedSkip.reason}</Text>
         ) : (
           <>
-            <Field label="Reason for skipping this date" value={reason} onChangeText={setReason} placeholder="Example: Out of town" multiline />
+            <Field label="Reason for skipping this date" value={reason} onChangeText={setReason} placeholder="Example: Out of town" multiline onFocus={() => { reasonFocused.current = true; scrollReasonIntoView(); }} onBlur={() => { reasonFocused.current = false; }} />
             <PrimaryButton title={busy ? 'Sending...' : 'Submit skip'} onPress={submit} disabled={busy || !reason.trim()} />
           </>
         )}
