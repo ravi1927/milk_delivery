@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -17,6 +17,7 @@ export default function Deliver() {
   const [row, setRow] = useState();
   const [uri, setUri] = useState();
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
 
   const load = async () => {
     try {
@@ -28,26 +29,34 @@ export default function Deliver() {
   };
   useEffect(() => { load(); }, [id]);
 
+  const submit = async (proofUri) => {
+    const photoUri = proofUri || uri;
+    if (!photoUri) return Alert.alert('Proof required', 'Take or select a delivery image before submitting.');
+    if (saving.current) return;
+    saving.current = true;
+    setBusy(true);
+    try {
+      await store.delivered(id, photoUri);
+      Alert.alert('Delivery submitted', 'The customer is marked DELIVERED and the proof is saved for this daily record.', [{ text: 'OK', onPress: () => r.back() }]);
+    } catch (e) { Alert.alert('Could not save delivery', e?.message || 'The photo was not uploaded. Check the connection and try again.'); }
+    finally { saving.current = false; setBusy(false); }
+  };
+
   const photo = async (camera) => {
+    if (busy || saving.current) return;
+    let picked;
     if (camera) {
       const p = await ImagePicker.requestCameraPermissionsAsync();
       if (!p.granted) return Alert.alert('Permission required', 'Camera permission is needed to take delivery proof.');
-      const x = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: .8 });
-      if (!x.canceled) setUri(x.assets[0].uri);
+      picked = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, base64: true });
     } else {
-      const x = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: .8 });
-      if (!x.canceled) setUri(x.assets[0].uri);
+      picked = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, base64: true });
     }
-  };
-
-  const submit = async () => {
-    if (!uri) return Alert.alert('Proof required', 'Take or select a delivery image before submitting.');
-    setBusy(true);
-    try {
-      await store.delivered(id, uri);
-      Alert.alert('Delivery submitted', 'The customer is marked DELIVERED and the proof is saved for this daily record.', [{ text: 'OK', onPress: () => r.back() }]);
-    } catch (e) { Alert.alert('Could not save delivery', e.message); }
-    finally { setBusy(false); }
+    if (picked.canceled || !picked.assets?.[0]?.uri) return;
+    const asset = picked.assets[0];
+    setUri(asset.uri);
+    const proof = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri;
+    await submit(proof);
   };
 
   const navigate = () => openDirections({
@@ -76,13 +85,13 @@ export default function Deliver() {
       <SectionTitle title="Customer location" subtitle={pinned ? 'Saved delivery pin. Open directions to navigate there.' : 'No map pin yet. Directions will search the written address.'} />
       {pinned && <CustomerMap height={240} points={[{ latitude: Number(row.c.latitude), longitude: Number(row.c.longitude), title: [row.c.name, row.c.address].filter(Boolean).join(' · ') }]} />}
       <PrimaryButton title="Open directions" secondary onPress={navigate} />
-      <SectionTitle title="Delivery proof" subtitle="Take a clear image after handing over the milk." />
+      <SectionTitle title="Delivery proof" subtitle="Take a clear image after handing over the milk. It uploads and marks this stop delivered right away." />
       {uri ? <Image source={{ uri }} style={styles.photo} /> : <View style={styles.placeholder}><Text style={styles.camera}>📷</Text><Text style={styles.placeholderText}>No proof image selected</Text></View>}
       <View style={styles.actions}>
-        <Pressable style={styles.secondaryBtn} onPress={() => photo(true)}><Text style={styles.secondaryText}>📷 Take Photo</Text></Pressable>
-        <Pressable style={styles.secondaryBtn} onPress={() => photo(false)}><Text style={styles.secondaryText}>🖼 Gallery</Text></Pressable>
+        <Pressable style={styles.secondaryBtn} disabled={busy} onPress={() => photo(true)}><Text style={styles.secondaryText}>📷 Take Photo</Text></Pressable>
+        <Pressable style={styles.secondaryBtn} disabled={busy} onPress={() => photo(false)}><Text style={styles.secondaryText}>🖼 Gallery</Text></Pressable>
       </View>
-      <PrimaryButton title={busy ? 'Saving...' : 'Submit & Mark Delivered'} onPress={submit} disabled={busy || !uri} />
+      <PrimaryButton title={busy ? 'Saving...' : 'Submit & Mark Delivered'} onPress={() => submit()} disabled={busy || !uri} />
     </ResponsiveContainer>
   );
 }

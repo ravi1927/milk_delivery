@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { parseLitres, cycleDueKey } from './billing';
-import { requiredCustomerLogin } from './customerLogin';
+import { generateCustomerLogin, requiredCustomerLogin } from './customerLogin';
 import { parsePoint } from './geo';
 import * as api from './apiClient';
 
@@ -122,6 +122,21 @@ export async function session() {
 export async function logout() {
   if (api.apiEnabled()) await api.logoutApi();
   await AsyncStorage.removeItem(K.s);
+}
+
+export async function changeOwnPassword(currentPassword, nextPassword) {
+  const current = String(currentPassword || '');
+  const next = String(nextPassword || '');
+  if (!current || next.length < 8) throw new Error('Enter your current password and a new password of at least 8 characters.');
+  if (current === next) throw new Error('Choose a password that is different from the current one.');
+  if (api.apiEnabled()) return api.changePassword(current, next);
+  const raw = await AsyncStorage.getItem(K.s);
+  const session = raw ? JSON.parse(raw) : null;
+  if (!session?.id) throw new Error('Please sign in again.');
+  const users = await getUsers();
+  const me = users.find((u) => same(u.id, session.id));
+  if (!me || String(me.password || '') !== current) throw new Error('Current password is incorrect');
+  await setJson(K.u, users.map((u) => same(u.id, session.id) ? { ...u, password: next } : u));
 }
 
 export async function createDeliveryBoy({ name, email, password, areaId }) {
@@ -314,39 +329,62 @@ function customerPayload(input, prev, id) {
   return clean;
 }
 
-function emailTaken(users, email, exceptId) {
-  return users.some((u) => !same(u.id, exceptId) && String(u.email || '').toLowerCase() === email);
+function duplicateLoginError(err) {
+  return /already (used|exists|in use)|email or user id already exists/i.test(String(err?.message || ''));
+}
+
+// Creates the users-table login when this customer does not have one yet.
+// An existing login keeps its email and password. Returns the generated login once, or null when nothing new was issued.
+async function attachCustomerLogin(customer) {
+  const users = await getUsers();
+  const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, customer.id));
+  if (existing) {
+    if (String(existing.name || '') !== String(customer.name || '')) {
+      const keptEmail = String(existing.email || '').trim().toLowerCase();
+      if (api.apiEnabled()) await api.updateUser(existing.id, { name: customer.name, email: keptEmail, role: 'customer', customerRecordId: customer.id, active: true });
+      else await setJson(K.u, users.map((u) => same(u.id, existing.id) ? { ...u, name: customer.name } : u));
+    }
+    return null;
+  }
+  let emails = users.map((u) => u.email);
+  let login = generateCustomerLogin(customer.name, emails);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    try {
+      await syncCustomerLogin(customer, login.email, login.password);
+      return { email: login.email, password: login.password };
+    } catch (err) {
+      if (!duplicateLoginError(err)) throw err;
+      emails = [...emails, login.email];
+      login = generateCustomerLogin(customer.name, emails);
+    }
+  }
+  throw new Error('Could not create a unique login email.');
 }
 
 export async function saveCustomer(input, id) {
-  const login = customerLoginOrThrow(input.email, input.password);
   const fields = withoutLogin(input);
   const point = parsePoint(fields.latitude, fields.longitude);
   const clean = { ...fields, ratePerLitre: Number(fields.ratePerLitre || 0), active: true, stoppedOn: null, latitude: point ? point.latitude : null, longitude: point ? point.longitude : null };
   if (api.apiEnabled()) {
     const cs = await getCustomers();
-    const prev = id ? cs.find(c => same(c.id, id)) || {} : {};
+    const prev = id ? cs.find((c) => same(c.id, id)) || {} : {};
     const row = customerPayload(fields, prev, id || `c_${Date.now()}`);
-    const users = await getUsers();
-    const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, row.id));
-    if (emailTaken(users, login.email, existing?.id)) throw new Error('That email is already used by another login.');
     await api.save('customers', row);
-    await syncCustomerLogin(row, login.email, login.password);
-    await ensureTodayRecords();
-    return row;
+    const issuedLogin = await attachCustomerLogin(row);
+    try { await ensureTodayRecords(); } catch (err) { console.warn('Today records', err); }
+    return { ...row, issuedLogin };
   }
   const cs = await getCustomers();
   const targetId = id || `c_${Date.now()}`;
-  const users = await getUsers();
-  const existing = users.find((u) => String(u.role) === 'customer' && same(u.customerRecordId, targetId));
-  if (emailTaken(users, login.email, existing?.id)) throw new Error('That email is already used by another login.');
-  if (id) await setJson(K.c, cs.map(c => c.id === id ? { ...c, ...clean } : c));
-  else await setJson(K.c, [...cs, { ...clean, id: targetId, createdOn: dateKey() }]);
-  await syncCustomerLogin({ ...clean, id: targetId }, login.email, login.password);
-  await ensureTodayRecords();
-  const ds = await getDeliveries(); const today = dateKey();
-  await setJson(K.d, ds.map(d => d.date === today && d.customerId === targetId && d.status === 'pending' ? { ...d, expectedLitres: litresFrom(clean.milkQuantity), ratePerLitre: Number(clean.ratePerLitre || 0), amount: litresFrom(clean.milkQuantity) * Number(clean.ratePerLitre || 0), areaId: clean.areaId } : d));
-  return { ...clean, id: targetId };
+  const row = { ...clean, id: targetId, createdOn: id ? (cs.find((c) => c.id === id)?.createdOn || dateKey()) : dateKey() };
+  if (id) await setJson(K.c, cs.map((c) => c.id === id ? { ...c, ...clean } : c));
+  else await setJson(K.c, [...cs, row]);
+  const issuedLogin = await attachCustomerLogin(row);
+  try { await ensureTodayRecords(); } catch (err) { console.warn('Today records', err); }
+  const ds = await getDeliveries();
+  const today = dateKey();
+  await setJson(K.d, ds.map((d) => d.date === today && d.customerId === targetId && d.status === 'pending' ? { ...d, expectedLitres: litresFrom(clean.milkQuantity), ratePerLitre: Number(clean.ratePerLitre || 0), amount: litresFrom(clean.milkQuantity) * Number(clean.ratePerLitre || 0), areaId: clean.areaId } : d));
+  return { ...row, issuedLogin };
 }
 
 export async function deleteCustomer(id) {

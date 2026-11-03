@@ -28,6 +28,7 @@
       }
     },
     "plugins": [
+      "./plugins/withCleartextApi.js",
       "expo-router",
       [
         "expo-splash-screen",

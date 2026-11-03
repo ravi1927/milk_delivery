@@ -41,6 +41,10 @@ export default function CustomerProfile() {
   const [selected, setSelected] = useState(today);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [nextPassword, setNextPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -151,6 +155,32 @@ export default function CustomerProfile() {
     catch (e) { Alert.alert('PDF failed', e.message); }
   };
 
+  const changePassword = async () => {
+    if (pwBusy) return;
+    if (!currentPassword || !nextPassword) {
+      Alert.alert('Password', 'Enter your current password and a new password.');
+      return;
+    }
+    if (nextPassword.length < 8) {
+      Alert.alert('Password', 'The new password must be at least 8 characters.');
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      Alert.alert('Password', 'The new password and confirmation do not match.');
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await s.changeOwnPassword(currentPassword, nextPassword);
+      setCurrentPassword('');
+      setNextPassword('');
+      setConfirmPassword('');
+      Alert.alert('Password updated', 'Use the new password the next time you sign in.');
+    } catch (e) {
+      Alert.alert('Could not change password', e?.message || 'Try again.');
+    } finally { setPwBusy(false); }
+  };
+
   const selectedSkip = skipByDate.get(selected);
   const cells = cellsFor(cursor.year, cursor.month);
 
@@ -178,7 +208,7 @@ export default function CustomerProfile() {
 
   return (
     <ResponsiveContainer avoidKeyboard footer={skipForm}>
-      <Header title="My profile" subtitle="Read only" />
+      <Header title="My profile" subtitle="Your account" />
       <View style={styles.card}>
         <Text style={styles.name}>{customer?.name || user?.name || 'Customer'}</Text>
         <Text style={styles.line}>Phone: {customer?.phone || 'Not set'}</Text>
@@ -186,6 +216,14 @@ export default function CustomerProfile() {
         <Text style={styles.line}>Milk: {customer?.milkQuantity || 'Not set'}</Text>
         <Text style={styles.line}>Rate: {customer ? `${s.money(customer.ratePerLitre)} per litre` : 'Not set'}</Text>
         <Text style={styles.note}>These details can only be changed by the dairy admin.</Text>
+      </View>
+
+      <SectionTitle title="Change password" subtitle={user?.email ? `Signed in as ${user.email}` : 'Update the password for this login.'} />
+      <View style={styles.card}>
+        <Field label="Current password" value={currentPassword} onChangeText={setCurrentPassword} secureTextEntry autoComplete="password" textContentType="password" placeholder="Current password" />
+        <Field label="New password" value={nextPassword} onChangeText={setNextPassword} secureTextEntry autoComplete="new-password" textContentType="newPassword" placeholder="At least 8 characters" />
+        <Field label="Confirm new password" value={confirmPassword} onChangeText={setConfirmPassword} secureTextEntry autoComplete="new-password" textContentType="newPassword" placeholder="Repeat the new password" />
+        <PrimaryButton title={pwBusy ? 'Updating...' : 'Update password'} onPress={changePassword} disabled={pwBusy} />
       </View>
 
       <SectionTitle title={`Bill for ${monthLabel(cursor.year, cursor.month)}`} subtitle="Amount = billed days × daily litres × rate. A date you skip is not charged." />

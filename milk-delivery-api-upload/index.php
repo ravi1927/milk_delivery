@@ -193,6 +193,28 @@ function mirrorLoginPassword(PDO $pdo, string $userId, string $role, string $has
     }
   } catch (Throwable $e) { /* users.password_hash already saved; a missing login table must not undo it */ }
 }
+function changePasswordTogether(PDO $pdo, $userId, string $role, string $hash): void {
+  $pdo->beginTransaction();
+  try {
+    $pdo->prepare('UPDATE users SET password_hash=? WHERE CAST(id AS CHAR)=CAST(? AS CHAR)')->execute([$hash, $userId]);
+    $check=$pdo->prepare('SELECT password_hash FROM users WHERE CAST(id AS CHAR)=CAST(? AS CHAR) LIMIT 1');
+    $check->execute([$userId]);
+    $saved=$check->fetch();
+    if (!$saved || (string)($saved['password_hash'] ?? '')!==$hash) throw new RuntimeException('User password was not updated');
+    if (tableExists($pdo,'login')) {
+      $pdo->prepare('UPDATE login SET password_hash=?, role=? WHERE CAST(user_id AS CHAR)=CAST(? AS CHAR)')->execute([$hash, $role, $userId]);
+      $q=$pdo->prepare('SELECT id FROM login WHERE CAST(user_id AS CHAR)=CAST(? AS CHAR) LIMIT 1');
+      $q->execute([$userId]);
+      if (!$q->fetch()) {
+        $pdo->prepare('INSERT INTO login(user_id,role,password_hash,success,event,signed_in_at) VALUES(?,?,?,0,\'password\',NOW())')->execute([(string)$userId,$role,$hash]);
+      }
+    }
+    $pdo->commit();
+  } catch (Throwable $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    throw $e;
+  }
+}
 function insertUser(PDO $pdo, string $id, string $name, string $email, string $hash, string $role, ?string $areaId, ?string $customerRecordId): string {
   $hasLink=usersHaveCustomerLink($pdo);
   $run=function (?string $useId) use ($pdo,$name,$email,$hash,$role,$areaId,$customerRecordId,$hasLink): string {
@@ -563,6 +585,30 @@ $isCustomer=$user['role']==='customer';
 $customerRecordId=(string)($user['customerRecordId'] ?? '');
 
 if ($path === '/me' && $method==='GET') out(200,['user'=>$user]);
+if ($path === '/auth/password' && $method==='POST') {
+  $current=(string)($input['currentPassword'] ?? '');
+  $next=(string)($input['password'] ?? $input['newPassword'] ?? '');
+  if ($current==='' || $next==='') out(422,['error'=>'Enter your current password and a new password']);
+  if (strlen($next)<8) out(422,['error'=>'Password must be at least 8 characters']);
+  if ($current===$next) out(422,['error'=>'Choose a password that is different from the current one']);
+  $q=$pdo->prepare('SELECT id, password_hash, active FROM users WHERE id=? LIMIT 1');
+  $q->execute([$user['id']]);
+  $row=$q->fetch();
+  if (!$row) {
+    $q=$pdo->prepare('SELECT id, password_hash, active FROM users WHERE CAST(id AS CHAR)=CAST(? AS CHAR) LIMIT 1');
+    $q->execute([(string)$user['id']]);
+    $row=$q->fetch();
+  }
+  if (!$row || !(int)$row['active'] || !password_verify($current, (string)($row['password_hash'] ?? ''))) {
+    out(401, ['error'=>'Current password is incorrect']);
+  }
+  try {
+    changePasswordTogether($pdo, $row['id'], (string)$user['role'], password_hash($next, PASSWORD_DEFAULT));
+  } catch (Throwable $e) {
+    out(500, ['error'=>'Could not change the password', 'detail'=>$e->getMessage()]);
+  }
+  out(200, ['ok'=>true]);
+}
 if ($path === '/bootstrap' && $method==='GET') {
   // Ensure one fresh pending delivery row per active customer for today's local server date.
   $today=date('Y-m-d');
